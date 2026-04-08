@@ -1,0 +1,61 @@
+# Environment & secrets
+.env
+.env.*
+
+# Claude
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.venv/
+venv/
+env/
+
+# ML models & data
+backend/ml_models/
+backend/voices/
+backend/dictionaries/
+
+# Uploads & generated files
+backend/uploads/
+backend/static/covers/
+backend/failed_imports.log
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Capacitor
+frontend/android/
+frontend/ios/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
