@@ -337,6 +337,7 @@ def get_existing_titles(engine) -> set[str]:
 def save_book_to_db(engine, book_data, genre: str, epub_filename: str):
     """Save parsed book + chapters to database. Returns book.id or None."""
     with Session(engine) as session:
+        epub_full_path = str(UPLOADS_DIR / epub_filename)
         book = Book(
             title=book_data.title,
             author=book_data.author,
@@ -344,6 +345,7 @@ def save_book_to_db(engine, book_data, genre: str, epub_filename: str):
             genre=genre,
             language=book_data.language,
             epub_filename=epub_filename,
+            epub_path=epub_full_path,
             total_chapters=len(book_data.chapters),
             total_words=book_data.total_words,
         )

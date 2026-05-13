@@ -16,11 +16,19 @@ import {
   Button,
   IconButton,
   CircularProgress,
+  TextField,
+  InputAdornment,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from "@mui/material";
 import LogoutIcon from "@mui/icons-material/Logout";
 import HomeIcon from "@mui/icons-material/Home";
 import PersonIcon from "@mui/icons-material/Person";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import SearchIcon from "@mui/icons-material/Search";
+import ClearIcon from "@mui/icons-material/Clear";
 import api from "../services/api";
 import useAuthStore from "../store/authStore";
 import LanguageSelector from "../components/LanguageSelector";
@@ -34,6 +42,9 @@ export default function LibraryPage() {
   const { user, logout } = useAuthStore();
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [genreFilter, setGenreFilter] = useState("");
+  const [langFilter, setLangFilter] = useState("");
 
   useEffect(() => {
     api
@@ -42,6 +53,20 @@ export default function LibraryPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const genres = Array.from(new Set(books.map((b) => b.genre).filter(Boolean))) as string[];
+  const languages = Array.from(new Set(books.map((b) => b.language).filter(Boolean))) as string[];
+
+  const filtered = books.filter((book) => {
+    const q = search.toLowerCase();
+    const matchSearch =
+      !q ||
+      book.title.toLowerCase().includes(q) ||
+      book.author.toLowerCase().includes(q);
+    const matchGenre = !genreFilter || book.genre === genreFilter;
+    const matchLang = !langFilter || book.language === langFilter;
+    return matchSearch && matchGenre && matchLang;
+  });
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "grey.50" }}>
@@ -81,17 +106,78 @@ export default function LibraryPage() {
           {t("library")}
         </Typography>
 
+        {/* Search & filters */}
+        <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap", alignItems: "center" }}>
+          <TextField
+            size="small"
+            placeholder={t("search_books")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            sx={{ flexGrow: 1, minWidth: 200 }}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: search ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearch("")}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null,
+              },
+            }}
+          />
+
+          <FormControl size="small" sx={{ minWidth: 130 }}>
+            <InputLabel>{t("genre")}</InputLabel>
+            <Select
+              value={genreFilter}
+              label={t("genre")}
+              onChange={(e) => setGenreFilter(e.target.value)}
+            >
+              <MenuItem value="">{t("all")}</MenuItem>
+              {genres.map((g) => (
+                <MenuItem key={g} value={g}>{g}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl size="small" sx={{ minWidth: 110 }}>
+            <InputLabel>{t("language")}</InputLabel>
+            <Select
+              value={langFilter}
+              label={t("language")}
+              onChange={(e) => setLangFilter(e.target.value)}
+            >
+              <MenuItem value="">{t("all")}</MenuItem>
+              {languages.map((l) => (
+                <MenuItem key={l} value={l}>{l.toUpperCase()}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          {(search || genreFilter || langFilter) && (
+            <Typography variant="body2" color="text.secondary">
+              {t("found_books", { count: filtered.length })}
+            </Typography>
+          )}
+        </Box>
+
         {loading ? (
           <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
             <CircularProgress />
           </Box>
-        ) : books.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 8, textAlign: "center" }}>
-            {t("no_books")}
+            {search || genreFilter || langFilter ? t("no_results") : t("no_books")}
           </Typography>
         ) : (
           <Grid container spacing={3}>
-            {books.map((book) => (
+            {filtered.map((book) => (
               <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={book.id}>
                 <Card sx={{ height: "100%" }}>
                   <CardActionArea onClick={() => navigate(`/book/${book.id}`)}>

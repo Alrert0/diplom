@@ -1,6 +1,5 @@
 {
   "app_name": "AI Кітап Оқырман",
-
   "login": "Кіру",
   "register": "Тіркелу",
   "email": "Электрондық пошта",
@@ -14,7 +13,6 @@
   "email_taken": "Бұл email тіркелген",
   "username_taken": "Бұл пайдаланушы аты бос емес",
   "password_too_short": "Құпия сөз кемінде 6 таңбадан тұруы керек",
-
   "library": "Кітапхана",
   "books": "Кітаптар",
   "no_books": "Кітаптар әлі қосылмаған",
@@ -27,7 +25,6 @@
   "sort_rating": "Рейтинг",
   "filter": "Сүзгі",
   "all_genres": "Барлық жанрлар",
-
   "chapters": "Тараулар",
   "chapter": "Тарау",
   "description": "Сипаттама",
@@ -42,7 +39,6 @@
   "your_rating": "Сіздің бағаңыз",
   "review_placeholder": "Кітап туралы ойыңызбен бөлісіңіз...",
   "submit_review": "Пікір жіберу",
-
   "read": "Оқу",
   "start_reading": "Оқуды бастау",
   "continue_reading": "Оқуды жалғастыру",
@@ -50,7 +46,6 @@
   "reader": "Оқырман",
   "prev_chapter": "Алдыңғы",
   "next_chapter": "Келесі",
-
   "settings": "Параметрлер",
   "font_family": "Қаріп",
   "font_size": "Қаріп өлшемі",
@@ -62,7 +57,6 @@
   "serif": "Serif",
   "sans_serif": "Sans-serif",
   "monospace": "Monospace",
-
   "ai_summary": "AI Түйіндеме",
   "ai_chat": "AI Чат",
   "listen": "Тыңдау",
@@ -80,11 +74,9 @@
   "extract_key_sentences": "Негізгі сөйлемдерді шығару",
   "ai_error": "AI қызметі уақытша қол жетімсіз. Кейінірек қайталаңыз.",
   "book_indexing": "Кітап AI мүмкіндіктері үшін индекстелуде. Сәл кейін қайталаңыз.",
-
   "min_left_chapter": "~{{minutes}} мин тарау соңына дейін",
   "hrs_left_book": "~{{hours}} сағ кітап соңына дейін",
   "reading_speed": "{{wpm}} сөз/мин",
-
   "play": "Ойнату",
   "pause": "Кідірту",
   "stop": "Тоқтату",
@@ -97,13 +89,11 @@
   "audio_error": "Аудио жасау сәтсіз аяқталды. Қайталап көріңіз.",
   "audio_offline": "Офлайн режим",
   "audio_segment": "{{total}} бөліктің {{current}}-і",
-
   "definition": "Анықтама",
   "examples": "Мысалдар",
   "no_definition_found": "Анықтама табылмады",
   "vocab_mode_on": "Сөздік режимі: анықтаманы көру үшін сөзді басыңыз",
   "vocab_mode_off": "Сөздік режимі өшірулі",
-
   "home": "Басты бет",
   "recommended_for_you": "Сізге ұсынылады",
   "rate_books_for_recommendations": "Жеке ұсыныстар алу үшін кітаптарды бағалаңыз",
@@ -122,7 +112,6 @@
   "not_enough_data_for_clusters": "Кластерлік талдау үшін деректер жеткіліксіз",
   "session": "Сессия",
   "wpm": "сөз/мин",
-
   "loading": "Жүктелуде...",
   "error": "Қате",
   "error_occurred": "Қате орын алды",
@@ -134,9 +123,16 @@
   "profile": "Профиль",
   "book_not_found": "Кітап табылмады",
   "interface_language": "Интерфейс тілі",
-
   "ai_assistant": "AI Көмекші",
   "assistant_welcome": "Кітап көмекшісі",
   "assistant_description": "Кітапханамыздағы кітаптар туралы кез келген сұрақ қойыңыз! Мен кітаптар ұсына аламын, авторларды салыстыра аламын, жанрларды талқылай аламын.",
-  "assistant_placeholder": "Кітапханамыздағы кітаптар туралы сұраңыз..."
+  "assistant_placeholder": "Кітапханамыздағы кітаптар туралы сұраңыз...",
+  "regenerate": "Қайта жасау",
+  "search_books": "Кітап іздеу...",
+  "all": "Барлығы",
+  "found_books": "Табылды: {{count}}",
+  "no_results": "Кітаптар табылмады",
+  "currently_reading": "Қазір оқып жатырмын",
+  "no_reading_activity": "Белсенділік жоқ. Кітап оқуды бастаңыз!",
+  "go_to_library": "Кітапханаға өту"
 }

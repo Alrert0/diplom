@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Ollama
     OLLAMA_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen3:4b"
+    OLLAMA_MODEL: str = "qwen3:8b"
 
     # Embedding
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large"

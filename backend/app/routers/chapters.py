@@ -1,6 +1,8 @@
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +16,51 @@ from app.schemas.book import ReadingProgressUpdate, ReadingProgressResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reading", tags=["reading"])
+
+
+class BookProgressResponse(BaseModel):
+    book_id: int
+    title: str
+    author: str
+    cover_url: Optional[str] = None
+    current_chapter: int
+    total_chapters: int
+    percent: float  # 0-100
+    last_read_at: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/in-progress", response_model=list[BookProgressResponse])
+async def get_in_progress_books(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all books the user has started reading, with progress percentage."""
+    stmt = select(ReadingProgress, Book).join(
+        Book, Book.id == ReadingProgress.book_id
+    ).where(
+        ReadingProgress.user_id == current_user.id
+    ).order_by(ReadingProgress.last_read_at.desc())
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    items = []
+    for progress, book in rows:
+        total = book.total_chapters or 1
+        pct = min(100.0, round(progress.current_chapter / total * 100, 1))
+        items.append(BookProgressResponse(
+            book_id=book.id,
+            title=book.title,
+            author=book.author,
+            cover_url=book.cover_url,
+            current_chapter=progress.current_chapter,
+            total_chapters=total,
+            percent=pct,
+            last_read_at=progress.last_read_at.isoformat() if progress.last_read_at else None,
+        ))
+    return items
 
 
 @router.put("/progress", response_model=ReadingProgressResponse)

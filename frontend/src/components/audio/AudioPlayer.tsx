@@ -84,7 +84,6 @@ export default function AudioPlayer({
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [currentSegment, setCurrentSegment] = useState(0);
-  const [totalSegments, setTotalSegments] = useState(0);
 
   // Cache fetched chapter text so we don't re-fetch on every play
   const chapterTextRef = useRef<{ bookId: number; chapter: number; text: string } | null>(null);
@@ -189,12 +188,10 @@ export default function AudioPlayer({
     try {
       const chapterText = await fetchChapterText();
       const segments = splitTextIntoSegments(chapterText, MAX_CHARS_PER_REQUEST);
-      setTotalSegments(segments.length);
 
       for (let i = currentSegment; i < segments.length; i++) {
         if (stoppedRef.current) break;
 
-        setCurrentSegment(i);
         setProgress(0);
 
         const audioUrl = await synthesizeSegment(segments[i]);
@@ -215,6 +212,8 @@ export default function AudioPlayer({
       if (!stoppedRef.current) {
         setIsPlaying(false);
         setCurrentSegment(0);
+        setProgress(0);
+        setDuration(0);
       }
       setIsLoading(false);
     }
@@ -240,7 +239,6 @@ export default function AudioPlayer({
     setProgress(0);
     setDuration(0);
     setCurrentSegment(0);
-    setTotalSegments(0);
   };
 
   const handleSpeedChange = () => {
@@ -352,13 +350,6 @@ export default function AudioPlayer({
           <MenuItem value="female">{t("female")}</MenuItem>
           <MenuItem value="male">{t("male")}</MenuItem>
         </Select>
-
-        {/* Segment indicator */}
-        {totalSegments > 1 && (
-          <Typography variant="caption" sx={{ opacity: 0.7 }}>
-            {t("audio_segment", { current: currentSegment + 1, total: totalSegments })}
-          </Typography>
-        )}
 
         {/* Error */}
         {error && (

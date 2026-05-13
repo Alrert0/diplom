@@ -6,24 +6,29 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.book import Book
-from app.services.ai_service import _call_ollama, _stream_ollama, OllamaError
+from app.services.ai_service import _call_ollama, _stream_ollama, _strip_reasoning, OllamaError
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are a knowledgeable book assistant. You can discuss ANY book, author, or literary topic — "
-    "recommendations, summaries, comparisons, analysis, reading lists, genres, literary history, and more. "
-    "You are passionate about books and reading.\n\n"
-    "Rules:\n"
-    "1. Answer any question about books, authors, literature, reading, and related topics.\n"
-    "2. If asked about non-book topics (weather, sports, coding, politics, cooking, math, etc.), "
-    "politely say: 'I can only help with questions about books, authors, and literature. "
-    "What would you like to know about books?'\n"
-    "3. When recommending or discussing books, if any of them are marked as available in our library, "
-    "mention that so the user knows they can read them right away.\n"
-    "4. Be helpful, enthusiastic, and knowledgeable about world literature.\n"
-    "5. You can discuss books in any language — English, Russian, Kazakh, and others.\n"
-    "6. Respond in the same language the user writes in."
+    "You are a book assistant for an online reading platform. Answer ONLY the question — no reasoning, "
+    "no analysis, no 'Alternatively...', no 'Maybe...', no 'Wait...', no 'If the user...', "
+    "no 'I need to...', no thinking aloud.\n\n"
+    "ANSWER FORMAT: Give a direct, factual answer in 1-3 sentences. Match the user's language.\n\n"
+    "QUESTION TYPES:\n"
+    "- General book question (who wrote X, what is X about): use your own knowledge. "
+    "If you don't know for sure, say so briefly.\n"
+    "- Platform question (do you have X, what books are available, recommend from your library): "
+    "use the LIBRARY DATABASE section if provided.\n"
+    "- Non-book topic: politely refuse in the user's language.\n\n"
+    "EXAMPLES of GOOD answers:\n"
+    "Q: Кто автор Войны и мира?\nA: Автор — Лев Толстой.\n\n"
+    "Q: Who wrote 1984?\nA: George Orwell wrote 1984, published in 1949.\n\n"
+    "Q: Есть ли у вас «Анна Каренина»?\nA: Да, есть в нашей библиотеке.\n\n"
+    "EXAMPLES of BAD answers (NEVER do this):\n"
+    "- 'Let me think...', 'Wait, maybe...', 'Alternatively...', 'The user is asking...'\n"
+    "- Repeating the question\n"
+    "- Showing your reasoning process"
 )
 
 SUGGESTION_PROMPTS = {
@@ -62,11 +67,16 @@ def _extract_search_terms(message: str) -> list[str]:
 async def _find_matching_books(db: AsyncSession, message: str) -> list[Book]:
     """Search the database for books that might be mentioned in the user's message."""
     terms = _extract_search_terms(message)
-    if not terms:
+
+    # Also try every word >= 4 chars from the message as a search term
+    words = [w.strip("«»\"'.,!?") for w in message.split() if len(w.strip("«»\"'.,!?")) >= 4]
+    all_terms = list(dict.fromkeys(terms + words))  # dedupe, preserve order
+
+    if not all_terms:
         return []
 
     found: dict[int, Book] = {}
-    for term in terms[:5]:
+    for term in all_terms[:8]:
         search = f"%{term}%"
         result = await db.execute(
             select(Book).where(
@@ -75,35 +85,95 @@ async def _find_matching_books(db: AsyncSession, message: str) -> list[Book]:
         )
         for book in result.scalars().all():
             found[book.id] = book
+        if found:
+            break  # stop early if we already found matches
 
     return list(found.values())[:5]
 
 
+_RECOMMENDATION_KEYWORDS = {
+    # Recommendations
+    "recommend", "suggest", "what to read", "что почитать", "посоветуй", "порекомендуй",
+    "what should i read", "reading list", "similar to", "похожее", "список", "подбери",
+    "ұсын", "қандай кітап", "оқуым керек",
+    # Platform / library availability
+    "available", "в наличии", "есть ли у вас", "есть ли в", "have you got",
+    "у вас есть", "в вашей библиотеке", "в библиотеке", "на платформе",
+    "your library", "your collection", "in your", "do you have",
+    "сколько книг", "какие книги", "какие у вас",
+}
+
+
+def _is_recommendation_query(message: str) -> bool:
+    """Return True if the user is asking for recommendations or library availability."""
+    msg_lower = message.lower()
+    return any(kw in msg_lower for kw in _RECOMMENDATION_KEYWORDS)
+
+
 def _build_user_message(message: str, matching_books: list[Book], total_books: int) -> str:
-    """Build the user message with library context."""
-    context_parts = []
+    """Build the user message, adding DB-sourced book data as authoritative context."""
+    is_rec = _is_recommendation_query(message)
+    parts: list[str] = []
+
     if matching_books:
         lines = []
         for b in matching_books:
-            line = f'- "{b.title}" by {b.author}'
+            line = f'Title: "{b.title}" | Author: {b.author}'
             if b.genre:
-                line += f" ({b.genre})"
-            if b.description:
-                desc = b.description[:100] + "..." if len(b.description) > 100 else b.description
-                line += f" — {desc}"
+                line += f" | Genre: {b.genre}"
+            if b.language:
+                line += f" | Language: {b.language}"
             lines.append(line)
-        context_parts.append(
-            "These books are available in our library:\n" + "\n".join(lines)
+        parts.append(
+            "LIBRARY DATABASE (authoritative — use for availability/recommendation answers):\n"
+            + "\n".join(lines)
+        )
+    elif is_rec:
+        parts.append(
+            f"LIBRARY DATABASE: {total_books} books available. "
+            "No specific matches found for this query — suggest from your general knowledge."
         )
 
-    context_parts.append(f"Our library has {total_books} books in total.")
-    context = "\n\n".join(context_parts)
+    parts.append(f"User question: {message}")
+    return "\n\n".join(parts)
 
-    return (
-        f"Library context:\n{context}\n\n"
-        f"---\n\n"
-        f"User question: {message}"
-    )
+
+async def _assistant_answer(message: str, matching_books: list[Book], total_books: int) -> str:
+    """Call Ollama and return a clean, deduplicated answer."""
+    user_message = _build_user_message(message, matching_books, total_books)
+    raw = await _call_ollama(SYSTEM_PROMPT, user_message, long=True)
+    result = _deduplicate(raw)
+
+    # If model produced only reasoning, retry with minimalist prompt
+    if not result:
+        minimal_prompt = (
+            "Answer in 1 short sentence. Match the user's language. "
+            "No thinking, no 'Wait', no 'Alternatively', no 'Maybe'. Just the answer."
+        )
+        raw2 = await _call_ollama(minimal_prompt, message)
+        result = _deduplicate(raw2)
+
+    # Still empty? Return graceful fallback
+    if not result:
+        result = (
+            "Не уверен в точном ответе на этот вопрос. "
+            "Попробуйте уточнить запрос или спросить о другой книге."
+        )
+
+    return result
+
+
+def _deduplicate(text: str) -> str:
+    """Remove repeated sentences/paragraphs that small models sometimes generate."""
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    seen: set[str] = set()
+    unique: list[str] = []
+    for p in paragraphs:
+        key = p.lower()[:80]  # compare first 80 chars to catch near-duplicates
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+    return "\n\n".join(unique)
 
 
 async def chat_with_assistant(
@@ -116,10 +186,8 @@ async def chat_with_assistant(
     count_result = await db.execute(select(func.count(Book.id)))
     total_books = count_result.scalar() or 0
 
-    user_message = _build_user_message(message, matching_books, total_books)
-
     try:
-        answer = await _call_ollama(SYSTEM_PROMPT, user_message)
+        answer = await _assistant_answer(message, matching_books, total_books)
         return {"answer": answer, "total_books": total_books}
     except OllamaError as e:
         raise e
@@ -130,15 +198,16 @@ async def chat_with_assistant_stream(
     language: str,
     db: AsyncSession,
 ) -> AsyncGenerator[str, None]:
-    """General book assistant chat (streaming). Yields text chunks."""
+    """General book assistant chat. Uses non-streaming call so reasoning is fully stripped."""
     matching_books = await _find_matching_books(db, message)
     count_result = await db.execute(select(func.count(Book.id)))
     total_books = count_result.scalar() or 0
 
-    user_message = _build_user_message(message, matching_books, total_books)
-
-    async for token in _stream_ollama(SYSTEM_PROMPT, user_message):
-        yield token
+    try:
+        answer = await _assistant_answer(message, matching_books, total_books)
+        yield answer
+    except OllamaError as e:
+        yield f"[Ошибка: {e}]"
 
 
 def get_suggestions(language: str) -> list[str]:

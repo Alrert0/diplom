@@ -12,36 +12,88 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_TIMEOUT = 120.0  # seconds — LLM generation can be slow
 
-OLLAMA_OPTIONS = {"num_ctx": 4096, "num_predict": 300, "temperature": 0.7}
+OLLAMA_OPTIONS = {"num_ctx": 4096, "num_predict": 600, "temperature": 0.7}
+OLLAMA_OPTIONS_LONG = {"num_ctx": 4096, "num_predict": 1200, "temperature": 0.7}
 
 # Regex to strip qwen3 think-aloud blocks from content.
 # Matches everything up to and including </think> (with optional whitespace).
 _THINK_TAG_RE = re.compile(r"^.*?</think>\s*", re.DOTALL)
 
 # Reasoning-line patterns that qwen3 leaks into content even with think:false.
+# Covers English, Russian, and Kazakh inner-monologue openers.
 _REASONING_PREFIXES = (
+    # English
     "Okay,", "Okay ", "Hmm", "Wait", "Let me", "I need", "I should",
     "I recall", "First,", "First ", "So,", "So ", "Ah!", "Better ",
     "*checks", "*double", "*types", "...User", "...Wait", "Done.",
-    "Final decision:", "The user",
+    "Final decision:", "The user", "I'll ", "I will ", "I have to",
+    "I want to", "I'm going", "Now I", "Now,", "Now ", "Looking at",
+    "Reading", "Analyzing", "Let's ", "Let us ",
+    "But the", "But since", "But I", "But this", "But we",
+    "Since the", "Since this", "Since I",
+    "The question", "The answer", "The rules", "The system",
+    "The context", "The library", "The book", "The note",
+    "The user's", "The request", "The task", "The prompt",
+    "According to", "Based on", "Per the", "Following the",
+    "So the answer", "So I", "So this", "So we",
+    "I don't", "I do ", "I can ", "I cannot", "I think",
+    "Actually,", "Actually ", "Note:", "Note that",
+    "Check:", "Step ", "Plan:", "My approach",
+    "In this case", "In summary", "To summarize",
+    "Possible ", "Possible:", "Option ", "Option:",
+    "Alternatively,", "Alternatively ", "Maybe ", "Maybe,",
+    "Perhaps,", "Perhaps ", "Wait,", "Wait ",
+    "If the", "If it", "If this", "If that", "If we",
+    "Given ", "Given that", "Given the",
+    "It seems", "It looks", "It appears",
+    "We need", "We have", "We can", "We should",
+    "There is", "There are", "Here's", "Here is",
+    # Russian
+    "Хорошо,", "Хорошо ", "Итак,", "Итак ", "Нужно ", "Мне нужно",
+    "Сначала,", "Сначала ", "Вижу,", "Вижу ", "Думаю,", "Думаю ",
+    "Давайте", "Давай ", "Ок,", "Ок ", "Значит,", "Значит ",
+    "Теперь,", "Теперь ", "Смотрю", "Читаю", "Анализирую",
+    "Пользователь", "Нужно создать", "Нужно написать",
+    "Я должен", "Я буду", "Я вижу", "Я читаю", "Я анализирую",
+    "Я прочитаю", "Посмотрим", "Рассмотрим", "Итак, я",
+    "Вопрос:", "Из отрывков", "Из предоставленных", "В предоставленных",
+    "Но в контексте", "Возможно, ответ", "Возможно,", "Таким образом,",
+    "В контексте", "Судя по", "На основе", "Исходя из",
+    "Ответ:", "Итоговый ответ", "Финальный ответ",
+    # Kazakh
+    "Жарайды,", "Жарайды ", "Бірінші,", "Бірінші ",
+    "Қарайық,", "Қарайық ", "Мен ", "Енді,", "Енді ",
 )
 
 # System prompts per language
+_NO_THINK = (
+    "Do NOT show your reasoning or thinking process. "
+    "Output ONLY the final answer, nothing else."
+)
+_NO_THINK_RU = (
+    "НЕ показывай свои рассуждения или процесс размышления. "
+    "Выводи ТОЛЬКО готовый ответ, без предисловий."
+)
+_NO_THINK_KK = (
+    "Ойлану үдерісіңді КӨРСЕТПЕ. ТІКЕЛЕЙ жауапты ғана жаз."
+)
+
 SUMMARY_PROMPTS = {
     "en": (
-        "You are a book reading assistant. Write a structured summary of the given chapter text. "
-        "Include: key events, important characters, and the main idea. "
-        "Keep it concise: 3-5 sentences."
+        "You are a book reading assistant. Write a short fluent summary of the given chapter: "
+        "3-5 sentences, no headings or labels. "
+        "Mention the main characters, key events, and the central idea. " + _NO_THINK
     ),
     "ru": (
-        "Ты — помощник по чтению книг. Напиши структурированное резюме данной главы. "
-        "Включи: ключевые события, важных персонажей и главную идею. "
-        "Будь кратким: 3-5 предложений. Отвечай на русском языке."
+        "Ты — помощник по чтению книг. Напиши краткое связное резюме данной главы: "
+        "3-5 предложений, без заголовков и меток. "
+        "Упомяни главных персонажей, ключевые события и основную идею. "
+        "Пиши только на русском языке, готовым текстом. " + _NO_THINK_RU
     ),
     "kk": (
         "Сен — кітап оқу көмекшісісің. Берілген тараудың құрылымдық түйіндемесін жаз. "
         "Негізгі оқиғалар, маңызды кейіпкерлер және басты идеяны қамти. "
-        "Қысқаша жаз: 3-5 сөйлем. Қазақ тілінде жауап бер."
+        "Қысқаша жаз: 3-5 сөйлем. Қазақ тілінде жауап бер. " + _NO_THINK_KK
     ),
 }
 
@@ -49,38 +101,31 @@ PROGRESS_PROMPTS = {
     "en": (
         "You are a book reading assistant. Summarize everything the reader has read so far. "
         "Highlight the main plot points, character development, and key themes. "
-        "Write a cohesive summary in 5-10 sentences."
+        "Write a cohesive summary in 5-10 sentences. " + _NO_THINK
     ),
     "ru": (
         "Ты — помощник по чтению книг. Подведи итог всему, что читатель прочитал до этого момента. "
         "Выдели основные сюжетные линии, развитие персонажей и ключевые темы. "
-        "Напиши связное резюме в 5-10 предложений. Отвечай на русском языке."
+        "Напиши связное резюме в 5-10 предложений. Отвечай на русском языке. " + _NO_THINK_RU
     ),
     "kk": (
         "Сен — кітап оқу көмекшісісің. Оқырман осы уақытқа дейін оқығанның бәрін түйіндеп жаз. "
         "Негізгі сюжет желілерін, кейіпкерлердің дамуын және басты тақырыптарды атап өт. "
-        "5-10 сөйлемнен тұратын байланысты түйіндеме жаз. Қазақ тілінде жауап бер."
+        "5-10 сөйлемнен тұратын байланысты түйіндеме жаз. Қазақ тілінде жауап бер. " + _NO_THINK_KK
     ),
 }
 
+_CHAT_BASE = (
+    "You are a book reading assistant. Answer the user's question ONLY based on the provided book text excerpts. "
+    "If the answer is not in the provided text, clearly state that the information is not available in the book. "
+    "Never use outside knowledge. Cite specific parts of the text when possible. "
+    "IMPORTANT: Always respond in the same language the user used to ask the question. " + _NO_THINK
+)
+
 CHAT_PROMPTS = {
-    "en": (
-        "You are a book reading assistant. Answer the user's question ONLY based on the provided book text excerpts. "
-        "If the answer is not in the provided text, clearly state that the information is not available in the book. "
-        "Never use outside knowledge. Cite specific parts of the text when possible."
-    ),
-    "ru": (
-        "Ты — помощник по чтению книг. Отвечай на вопрос пользователя ТОЛЬКО на основе предоставленных отрывков из книги. "
-        "Если ответа нет в тексте, чётко скажи, что информация в книге отсутствует. "
-        "Никогда не используй внешние знания. По возможности ссылайся на конкретные части текста. "
-        "Отвечай на русском языке."
-    ),
-    "kk": (
-        "Сен — кітап оқу көмекшісісің. Пайдаланушының сұрағына ТАҚЫРЫПТАН берілген кітап мәтінінің үзінділері негізінде ғана жауап бер. "
-        "Егер жауап мәтінде болмаса, ақпарат кітапта жоқ екенін анық айт. "
-        "Сыртқы білімді ешқашан пайдаланба. Мүмкіндігінше мәтіннің нақты бөліктеріне сілтеме жаса. "
-        "Қазақ тілінде жауап бер."
-    ),
+    "en": _CHAT_BASE,
+    "ru": _CHAT_BASE,
+    "kk": _CHAT_BASE,
 }
 
 
@@ -92,49 +137,90 @@ class OllamaError(Exception):
 def _strip_reasoning(text: str) -> str:
     """Remove qwen3 think-aloud reasoning from the response text.
 
-    qwen3 often outputs a </think> tag — everything before it is reasoning.
-    If no tag is present, strip leading paragraphs that look like internal monologue.
+    Handles three cases:
+    - <think>...</think> block at the start
+    - Reasoning paragraphs at the START of the response
+    - Reasoning paragraphs at the END of the response (model second-guesses itself)
     """
     if not text:
         return text
 
-    # 1. If there's a </think> tag, take only what follows it.
+    # 1. Strip <think>...</think> block
     if "</think>" in text:
-        text = _THINK_TAG_RE.sub("", text)
+        text = _THINK_TAG_RE.sub("", text).strip()
+
+    # 2. Split into paragraphs and clean
+    paragraphs = [p for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
         return text.strip()
 
-    # 2. Otherwise, strip leading reasoning paragraphs.
-    paragraphs = text.split("\n\n")
-    cleaned = []
-    found_real = False
+    def _is_reasoning(para: str) -> bool:
+        s = para.strip()
+        return any(s.startswith(p) for p in _REASONING_PREFIXES)
+
+    # Strip leading reasoning paragraphs
+    while paragraphs and _is_reasoning(paragraphs[0]):
+        paragraphs.pop(0)
+
+    # Truncate at first mid-response reasoning paragraph.
+    # Once the model starts thinking aloud, everything after is noise.
+    clean: list[str] = []
     for para in paragraphs:
-        stripped = para.strip()
-        if not stripped:
-            continue
-        if not found_real:
-            # Check if this paragraph is reasoning
-            if any(stripped.startswith(p) for p in _REASONING_PREFIXES):
-                continue  # skip this reasoning paragraph
-            found_real = True
-        cleaned.append(para)
+        if _is_reasoning(para):
+            break
+        clean.append(para)
 
-    result = "\n\n".join(cleaned).strip()
-    # If we accidentally stripped everything, return original
-    return result if result else text.strip()
+    # Deduplicate near-identical paragraphs before returning
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for p in clean:
+        key = p.strip().lower()[:80]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(p)
+    result = "\n\n".join(deduped).strip()
+    if result:
+        return result
+
+    # All paragraphs were reasoning — try to extract the actual answer.
+    # Look for sentences that sound like conclusions/answers, not meta-commentary.
+    _ANSWER_MARKERS = ("So the answer is ", "The answer is ", "Ответ: ", "Автор: ", "Answer: ")
+    for para in reversed(paragraphs):
+        for marker in _ANSWER_MARKERS:
+            if marker.lower() in para.lower():
+                idx = para.lower().index(marker.lower())
+                candidate = para[idx + len(marker):].strip().split(".")[0]
+                if candidate:
+                    return candidate
+
+    # Last resort: return empty string so callers can show their own fallback
+    return ""
 
 
-async def _call_ollama(system_prompt: str, user_message: str) -> str:
-    """Send a chat completion request to Ollama (non-streaming)."""
+async def _call_ollama(
+    system_prompt: str,
+    user_message: str,
+    long: bool = False,
+    primer: str = "",
+) -> str:
+    """Send a chat completion request to Ollama (non-streaming).
+
+    `primer` is an optional assistant message prefix that forces the model to
+    start generating content immediately instead of reasoning.
+    """
     url = f"{settings.OLLAMA_URL}/api/chat"
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+    if primer:
+        messages.append({"role": "assistant", "content": primer})
     payload = {
         "model": settings.OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "stream": False,
         "think": False,
-        "options": OLLAMA_OPTIONS,
+        "options": OLLAMA_OPTIONS_LONG if long else OLLAMA_OPTIONS,
     }
 
     try:
@@ -257,7 +343,7 @@ async def summarize_chapter(chapter_text: str, language: str = "en") -> str:
     """Generate a summary of a single chapter."""
     system_prompt = _get_prompt(SUMMARY_PROMPTS, language)
     chapter_text = _truncate_words(chapter_text, 2000)
-    return await _call_ollama(system_prompt, chapter_text)
+    return await _call_ollama(system_prompt, chapter_text, long=True)
 
 
 async def summarize_progress(chapters_texts: list[str], language: str = "en") -> str:
@@ -272,7 +358,7 @@ async def summarize_progress(chapters_texts: list[str], language: str = "en") ->
     combined = "\n\n".join(combined_parts)
     combined = _truncate_words(combined, 3000)
 
-    return await _call_ollama(system_prompt, combined)
+    return await _call_ollama(system_prompt, combined, long=True)
 
 
 async def chat_about_book(

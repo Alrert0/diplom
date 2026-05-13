@@ -1,6 +1,5 @@
 {
   "app_name": "AI Book Reader",
-
   "login": "Login",
   "register": "Register",
   "email": "Email",
@@ -14,7 +13,6 @@
   "email_taken": "This email is already registered",
   "username_taken": "This username is already taken",
   "password_too_short": "Password must be at least 6 characters",
-
   "library": "Library",
   "books": "Books",
   "no_books": "No books available yet",
@@ -27,7 +25,6 @@
   "sort_rating": "Rating",
   "filter": "Filter",
   "all_genres": "All genres",
-
   "chapters": "Chapters",
   "chapter": "Chapter",
   "description": "Description",
@@ -42,7 +39,6 @@
   "your_rating": "Your rating",
   "review_placeholder": "Share your thoughts about this book...",
   "submit_review": "Submit review",
-
   "read": "Read",
   "start_reading": "Start Reading",
   "continue_reading": "Continue Reading",
@@ -50,7 +46,6 @@
   "reader": "Reader",
   "prev_chapter": "Previous",
   "next_chapter": "Next",
-
   "settings": "Settings",
   "font_family": "Font",
   "font_size": "Font Size",
@@ -62,7 +57,6 @@
   "serif": "Serif",
   "sans_serif": "Sans-serif",
   "monospace": "Monospace",
-
   "ai_summary": "AI Summary",
   "ai_chat": "AI Chat",
   "listen": "Listen",
@@ -80,11 +74,9 @@
   "extract_key_sentences": "Extract Key Sentences",
   "ai_error": "AI service is currently unavailable. Please try again later.",
   "book_indexing": "Book is being indexed for AI features. Please try again shortly.",
-
   "min_left_chapter": "~{{minutes}} min left in chapter",
   "hrs_left_book": "~{{hours}} hrs left in book",
   "reading_speed": "{{wpm}} words/min",
-
   "play": "Play",
   "pause": "Pause",
   "stop": "Stop",
@@ -97,13 +89,11 @@
   "audio_error": "Failed to generate audio. Please try again.",
   "audio_offline": "Offline mode",
   "audio_segment": "Part {{current}} of {{total}}",
-
   "definition": "Definition",
   "examples": "Examples",
   "no_definition_found": "No definition found",
   "vocab_mode_on": "Vocabulary mode: tap a word to see its definition",
   "vocab_mode_off": "Vocabulary mode off",
-
   "home": "Home",
   "recommended_for_you": "Recommended for You",
   "rate_books_for_recommendations": "Rate some books to get personalized recommendations",
@@ -122,7 +112,6 @@
   "not_enough_data_for_clusters": "Not enough data for cluster analysis",
   "session": "Session",
   "wpm": "WPM",
-
   "loading": "Loading...",
   "error": "Error",
   "error_occurred": "An error occurred",
@@ -134,9 +123,16 @@
   "profile": "Profile",
   "book_not_found": "Book not found",
   "interface_language": "Interface language",
-
   "ai_assistant": "AI Assistant",
   "assistant_welcome": "Book Assistant",
   "assistant_description": "Ask me anything about books in our library! I can recommend books, compare authors, discuss genres, and more.",
-  "assistant_placeholder": "Ask about books in our library..."
+  "assistant_placeholder": "Ask about books in our library...",
+  "regenerate": "Regenerate",
+  "search_books": "Search books...",
+  "all": "All",
+  "found_books": "{{count}} found",
+  "no_results": "No books found",
+  "currently_reading": "Currently Reading",
+  "no_reading_activity": "No reading activity yet. Start reading a book!",
+  "go_to_library": "Go to Library"
 }

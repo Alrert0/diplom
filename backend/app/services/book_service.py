@@ -3,8 +3,10 @@ import logging
 import os
 import re
 import textwrap
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup, NavigableString
 import ebooklib
@@ -53,20 +55,44 @@ def _html_to_text(html: str) -> str:
 
 
 # ── Chapter heading patterns ──
-# Matches: "Chapter I.", "CHAPTER XLII", "Chapter 5", "CHAPTERXXVII",
-#          "Chapter One", "CHAPTER TWENTY-THREE"
-_WORD_NUMS = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)"
+# English word numerals and ordinals (one, twentieth, etc.)
+_WORD_NUMS = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
+
+# Russian ordinals/cardinals for "Глава первая / Глава 1"
+_RU_NUMS = r"(?:перв(?:ая|ый)|втор(?:ая|ой)|треть(?:я|ий)|четвёртая|четвертая|пят(?:ая|ый)|шест(?:ая|ой)|седьм(?:ая|ой)|восьм(?:ая|ой)|девят(?:ая|ый)|десят(?:ая|ый)|одиннадцат(?:ая|ый)|двенадцат(?:ая|ый))"
+
+# Kazakh ordinal endings
+_KK_NUMS = r"(?:бірінші|екінші|үшінші|төртінші|бесінші|алтыншы|жетінші|сегізінші|тоғызыншы|оныншы)"
+
+# Combined chapter regex — EN/RU/KK
+# EN: Chapter I/1/One/Twenty-three     RU: Глава 1 / Глава первая    KK: Тарау 1 / Бірінші тарау
 _CHAPTER_RE = re.compile(
-    rf"(?:Chapter|CHAPTER)\s*(?:[IVXLC\d]+|{_WORD_NUMS}(?:[- ]{_WORD_NUMS})*)",
-    re.IGNORECASE,
+    rf"(?:Chapter|CHAPTER|Глава|ГЛАВА|глава|Тарау|ТАРАУ|тарау|Бөлім|БӨЛІМ|бөлім)\s*(?:[IVXLCivxlc\d]+|{_WORD_NUMS}(?:[- ]{_WORD_NUMS})*|{_RU_NUMS})"
+    rf"|(?:{_KK_NUMS})\s*(?:тарау|Тарау|бөлім|Бөлім)",
+    re.IGNORECASE | re.UNICODE,
 )
-# Matches: "PART ONE", "Part I", "Part 1", "BOOK I", "BOOK 1", "VOLUME I"
+# Part / Book / Volume — EN/RU/KK
 _PART_RE = re.compile(
-    rf"(?:PART|Part|BOOK|Book|VOLUME|Volume)\s+(?:[IVXLC\d]+|{_WORD_NUMS}(?:[- ]{_WORD_NUMS})*)",
-    re.IGNORECASE,
+    rf"(?:PART|Part|BOOK|Book|VOLUME|Volume|Часть|ЧАСТЬ|часть|Книга|КНИГА|книга|Том|ТОМ|том|Кітап|КІТАП|кітап)\s+"
+    rf"(?:[IVXLCivxlc\d]+|{_WORD_NUMS}(?:[- ]{_WORD_NUMS})*|{_RU_NUMS}|{_KK_NUMS})",
+    re.IGNORECASE | re.UNICODE,
 )
 # Matches: standalone "I.", "II.", "III.", "IV.", "XII." as chapter markers (in headings only)
 _ROMAN_RE = re.compile(r"^[IVXLC]+\.?$")
+
+# Non-content TOC entries to skip (multilingual)
+_TOC_SKIP_KEYWORDS = {
+    # English
+    "contents", "table of contents", "cover", "title page", "half-title", "half title",
+    "copyright", "license", "licence", "colophon", "index", "bibliography",
+    "dedication", "acknowledgments", "acknowledgements", "about the author",
+    "frontispiece", "imprint", "endnotes", "footnotes",
+    # Russian
+    "содержание", "оглавление", "обложка", "титульный лист", "авторские права",
+    "об авторе", "выходные данные", "примечания", "сноски",
+    # Kazakh
+    "мазмұны", "мұқаба", "титул беті", "авторлық құқық", "автор туралы",
+}
 
 
 def _is_chapter_heading(text: str) -> str | None:
@@ -157,6 +183,9 @@ def _split_document_into_chapters(html_content: str) -> list[tuple[str, str]]:
             end = len(full_text)
 
         chunk = full_text[start + len(marker):end].strip()
+        chunk = re.sub(r"\x00[^\x00]*\x00\d+\x00", " ", chunk)
+        chunk = chunk.replace("\x00", "")
+        chunk = re.sub(r"\s+", " ", chunk).strip()
         if len(chunk.split()) >= 20:
             chapters.append((chapter_title, chunk))
 
@@ -197,6 +226,9 @@ def _split_by_sub_headings(soup: BeautifulSoup) -> list[tuple[str, str]]:
             end = len(full_text)
 
         chunk = full_text[start + len(marker):end].strip()
+        chunk = re.sub(r"\x00[^\x00]*\x00\d+\x00", " ", chunk)
+        chunk = chunk.replace("\x00", "")
+        chunk = re.sub(r"\s+", " ", chunk).strip()
         if len(chunk.split()) >= 20:
             chunks.append((title, chunk))
 
@@ -240,6 +272,209 @@ def _merge_short_chapters(chapters: list[tuple[str, str]]) -> list[tuple[str, st
             merged.append((pending_title, pending_text))
 
     return merged
+
+
+@dataclass
+class TocEntry:
+    title: str
+    file_href: str  # XHTML file path inside EPUB
+    anchor: str | None  # fragment id within file, or None
+
+
+def _walk_toc(items, out: list[TocEntry] | None = None) -> list[TocEntry]:
+    """Flatten EPUB TOC tree (Section/Link nodes) into ordered list of entries."""
+    if out is None:
+        out = []
+    for item in items:
+        if isinstance(item, tuple):
+            section, children = item
+            href = getattr(section, "href", None)
+            title = getattr(section, "title", None)
+            if href and title:
+                file_part, _, anchor = href.partition("#")
+                out.append(TocEntry(title.strip(), unquote(file_part), anchor or None))
+            _walk_toc(children, out)
+        elif isinstance(item, epub.Link):
+            href = item.href or ""
+            title = (item.title or "").strip()
+            if href and title:
+                file_part, _, anchor = href.partition("#")
+                out.append(TocEntry(title, unquote(file_part), anchor or None))
+    return out
+
+
+def _clean_toc_title(title: str) -> str:
+    """
+    Strip caption/illustration text that Project Gutenberg sometimes prepends to TOC entries.
+    Example: "I hope Mr. Bingley will like it. CHAPTER II." -> "CHAPTER II."
+    Heuristic: if a chapter/part marker is preceded by a sentence-ending punctuation
+    (a real preamble), drop the preamble.
+    """
+    title = re.sub(r"\s+", " ", title).strip()
+    for pattern in (_CHAPTER_RE, _PART_RE):
+        m = pattern.search(title)
+        if not m or m.start() == 0:
+            continue
+        preamble = title[: m.start()].rstrip()
+        # Preamble is a real prefix (not "in Chapter 5") if it ends with sentence punctuation.
+        # Includes ASCII (.!?"':) plus curly quotes/guillemets used by Project Gutenberg.
+        if preamble and preamble[-1] in '.!?":\'»)”’»':
+            return title[m.start():].strip()
+    return title
+
+
+def _is_skippable_toc_title(title: str) -> bool:
+    """Return True if TOC title looks like front/back matter we should drop."""
+    t = title.strip().lower()
+    if not t:
+        return True
+    if t in _TOC_SKIP_KEYWORDS:
+        return True
+    # Substring check for things like "Project Gutenberg License"
+    for kw in ("project gutenberg", "gutenberg license"):
+        if kw in t:
+            return True
+    return False
+
+
+def _normalize_filename(name: str) -> str:
+    """Normalize EPUB internal filename (strip leading folders, decode, lowercase)."""
+    name = unquote(name or "")
+    # Drop leading directory segments — TOC may use 'OEBPS/file.xhtml' while
+    # ebooklib stores items as 'file.xhtml'. Compare on basename.
+    return name.split("/")[-1].lower()
+
+
+def _split_html_by_anchors(
+    html: str, anchors_in_order: list[tuple[str | None, str]]
+) -> list[tuple[str, str]]:
+    """
+    Split a single XHTML document into chapters using DOM anchor IDs.
+    `anchors_in_order` is a list of (anchor_id_or_None, title) in TOC order.
+    The first entry may have anchor=None meaning "start of document".
+    Returns list of (title, plain_text) tuples.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+
+    # Insert a unique marker text node immediately before each anchor element.
+    # For anchor=None (first/only chapter), the marker goes at the very start of <body>.
+    marker_prefix = "\x00TOC_SPLIT\x00"
+    inserted = 0
+    for i, (anchor, _title) in enumerate(anchors_in_order):
+        marker = NavigableString(f"{marker_prefix}{i}\x00")
+        if anchor is None:
+            body = soup.body or soup
+            if body.contents:
+                body.insert(0, marker)
+            else:
+                body.append(marker)
+            inserted += 1
+            continue
+        # Find element whose id == anchor, or an <a name="anchor">
+        target = soup.find(attrs={"id": anchor})
+        if target is None:
+            target = soup.find("a", attrs={"name": anchor})
+        if target is None:
+            continue  # anchor not found — entry will be empty, will be merged later
+        target.insert_before(marker)
+        inserted += 1
+
+    if inserted == 0:
+        return []
+
+    full_text = soup.get_text(separator=" ", strip=True)
+    full_text = re.sub(r"\s+", " ", full_text).strip()
+
+    chunks: list[tuple[str, str]] = []
+    for i, (_anchor, title) in enumerate(anchors_in_order):
+        marker = f"{marker_prefix}{i}\x00"
+        start = full_text.find(marker)
+        if start == -1:
+            continue
+        if i + 1 < len(anchors_in_order):
+            next_marker = f"{marker_prefix}{i + 1}\x00"
+            end = full_text.find(next_marker)
+            if end == -1:
+                end = len(full_text)
+        else:
+            end = len(full_text)
+        chunk = full_text[start + len(marker):end].strip()
+        # Scrub any leaked split markers (can happen if TOC anchor order != DOM order)
+        chunk = re.sub(r"\x00[^\x00]*\x00\d+\x00", " ", chunk)
+        chunk = chunk.replace("\x00", "")
+        chunk = re.sub(r"\s+", " ", chunk).strip()
+        chunks.append((title, chunk))
+
+    return chunks
+
+
+def _extract_chapters_from_toc(book: epub.EpubBook) -> list[tuple[str, str]]:
+    """
+    Build chapter list using the EPUB TOC (NCX/NAV) as the authoritative outline.
+    Returns ordered list of (title, plain_text). Empty list if TOC is unusable.
+    """
+    toc_entries = _walk_toc(book.toc)
+    if not toc_entries:
+        return []
+
+    # Index spine documents by basename for lookup
+    docs_by_name: dict[str, str] = {}
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        key = _normalize_filename(item.get_name())
+        docs_by_name[key] = item.get_content().decode("utf-8", errors="replace")
+
+    # Group TOC entries by file (preserving order across files)
+    file_order: list[str] = []
+    grouped: dict[str, list[TocEntry]] = {}
+    for entry in toc_entries:
+        key = _normalize_filename(entry.file_href)
+        if key not in grouped:
+            grouped[key] = []
+            file_order.append(key)
+        grouped[key].append(entry)
+
+    chapters: list[tuple[str, str]] = []
+    for fname in file_order:
+        html = docs_by_name.get(fname)
+        if html is None:
+            # Try to find by suffix match (TOC may reference relative path differently)
+            for k, v in docs_by_name.items():
+                if k.endswith(fname) or fname.endswith(k):
+                    html = v
+                    break
+        if html is None:
+            continue
+
+        entries = grouped[fname]
+        # Single entry without anchor — whole file is one chapter
+        if len(entries) == 1 and entries[0].anchor is None:
+            text = _html_to_text(html)
+            chapters.append((entries[0].title, text))
+            continue
+
+        # Multiple entries OR single entry with anchor — split by anchor positions
+        anchors = [(e.anchor, e.title) for e in entries]
+        # If first anchor isn't at document start, prepend a synthetic None entry to capture lead-in
+        # but only if the first entry actually points to a non-start anchor (otherwise we'd duplicate).
+        sub = _split_html_by_anchors(html, anchors)
+        chapters.extend(sub)
+
+    # Filter front/back matter and very short entries; clean illustration captions from titles
+    cleaned: list[tuple[str, str]] = []
+    for title, text in chapters:
+        title = _clean_toc_title(title)
+        if _is_skippable_toc_title(title):
+            continue
+        word_count = len(text.split())
+        if word_count < 20:
+            continue
+        cleaned.append((title, text))
+
+    # Merge tiny entries with their neighbors (Preface fragments, etc.)
+    cleaned = _merge_short_chapters(cleaned)
+    return cleaned
 
 
 def _extract_cover(book: epub.EpubBook) -> bytes | None:
@@ -351,12 +586,16 @@ def generate_placeholder_cover(title: str, author: str) -> bytes:
     return buf.getvalue()
 
 
-_BOILERPLATE_KW = ["gutenberg", "license", "copyright", "table of contents", "contents"]
+_BOILERPLATE_KW = [
+    "gutenberg", "license", "copyright", "table of contents", "contents",
+    "list of illustrations", "illustrations", "list of plates",
+]
 
 
 def parse_epub(file_path: str) -> BookData:
     """Parse an EPUB file and extract metadata, cover, and chapters."""
-    book = epub.read_epub(file_path, options={"ignore_ncx": True})
+    # ignore_ncx=False so we can read the TOC (NCX/NAV) for chapter boundaries
+    book = epub.read_epub(file_path, options={"ignore_ncx": False})
 
     # Metadata
     title = book.get_metadata("DC", "title")
@@ -378,43 +617,75 @@ def parse_epub(file_path: str) -> BookData:
     if not cover_bytes:
         cover_bytes = generate_placeholder_cover(title, author)
 
-    # Chapters — iterate spine items in reading order, splitting multi-chapter documents
+    # Chapters — try TOC first (authoritative), fall back to heading-based splitting
     chapters: list[ChapterData] = []
-    chapter_num = 0
+    raw_chapters: list[tuple[str, str]] = _extract_chapters_from_toc(book)
+    used_toc = bool(raw_chapters)
 
-    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-        html_content = item.get_content().decode("utf-8", errors="replace")
-        sub_chapters = _split_document_into_chapters(html_content)
-
-        for chapter_title, text in sub_chapters:
-            # Skip boilerplate (Project Gutenberg license, TOC, etc.)
-            title_lower = (chapter_title or "").lower()
-            text_lower = text[:500].lower()
-            if any(kw in title_lower for kw in _BOILERPLATE_KW):
-                continue
-            if any(kw in text_lower for kw in ["project gutenberg", "*** start of", "*** end of"]):
-                continue
-            # Skip TOC-like pages (mostly chapter headings, no real content)
-            chapter_heading_count = len(_CHAPTER_RE.findall(text))
-            word_count = len(text.split())
-            if chapter_heading_count > 5 and word_count < chapter_heading_count * 30:
-                continue
-            chapter_num += 1
-            # Normalize title: "CHAPTERXXVII" → "Chapter XXVII"
-            clean_title = chapter_title or f"Chapter {chapter_num}"
-            clean_title = re.sub(
-                r"(?i)chapter\s*([IVXLC\d]+)",
-                lambda m: f"Chapter {m.group(1)}",
-                clean_title,
+    # Detect "TOC too sparse" via spine coverage: some EPUBs (Gibran's Prophet) have a TOC
+    # that references only a few files while the real content is split across many spine docs.
+    if used_toc:
+        toc_files = {_normalize_filename(e.file_href) for e in _walk_toc(book.toc)}
+        substantial_spine = [
+            item for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
+            if len(item.get_content()) > 1500  # skip cover/wrap pages
+        ]
+        if substantial_spine:
+            covered = sum(
+                1 for item in substantial_spine
+                if _normalize_filename(item.get_name()) in toc_files
             )
-            chapters.append(
-                ChapterData(
-                    chapter_number=chapter_num,
-                    title=clean_title,
-                    content=text,
-                    word_count=word_count,
+            coverage = covered / len(substantial_spine)
+            if coverage < 0.5:
+                logger.info(
+                    "TOC covers only %.0f%% of spine in %s — falling back to heading split",
+                    coverage * 100, file_path,
                 )
+                raw_chapters = []
+                used_toc = False
+
+    if not used_toc:
+        # Fallback: scan spine documents and split by heading regex
+        logger.info("No usable TOC found in %s, falling back to heading-based split", file_path)
+        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+            html_content = item.get_content().decode("utf-8", errors="replace")
+            raw_chapters.extend(_split_document_into_chapters(html_content))
+
+    chapter_num = 0
+    for chapter_title, text in raw_chapters:
+        # Skip Project Gutenberg boilerplate
+        title_lower = (chapter_title or "").lower()
+        text_lower = text[:500].lower()
+        if any(kw in title_lower for kw in _BOILERPLATE_KW):
+            continue
+        if any(kw in text_lower for kw in ["project gutenberg", "*** start of", "*** end of"]):
+            continue
+        # Skip TOC-like pages (only meaningful for the regex fallback path)
+        if not used_toc:
+            chapter_heading_count = len(_CHAPTER_RE.findall(text))
+            word_count_check = len(text.split())
+            if chapter_heading_count > 5 and word_count_check < chapter_heading_count * 30:
+                continue
+
+        chapter_num += 1
+        word_count = len(text.split())
+        clean_title = chapter_title or f"Chapter {chapter_num}"
+        # Normalize "CHAPTERXXVII" → "Chapter XXVII" for english headings only
+        clean_title = re.sub(
+            r"(?i)chapter\s*([IVXLC\d]+)",
+            lambda m: f"Chapter {m.group(1)}",
+            clean_title,
+        )
+        # Normalize whitespace (TOC titles sometimes contain weird spacing)
+        clean_title = re.sub(r"\s+", " ", clean_title).strip()
+        chapters.append(
+            ChapterData(
+                chapter_number=chapter_num,
+                title=clean_title,
+                content=text,
+                word_count=word_count,
             )
+        )
 
     total_words = sum(ch.word_count for ch in chapters)
 

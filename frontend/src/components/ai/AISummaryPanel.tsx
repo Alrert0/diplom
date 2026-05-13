@@ -12,6 +12,7 @@ import {
   Alert,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import api from "../../services/api";
 import TextRankSummary from "./TextRankSummary";
 
@@ -41,9 +42,9 @@ export default function AISummaryPanel({
 
   const cacheKey = `${bookId}-${chapterNumber}`;
 
-  const handleChapterSummary = async () => {
-    // Check cache
-    if (chapterCacheRef.current[cacheKey]) {
+  const handleChapterSummary = async (forceRefresh = false) => {
+    // Use frontend cache only if not forcing refresh
+    if (!forceRefresh && chapterCacheRef.current[cacheKey]) {
       setChapterSummary(chapterCacheRef.current[cacheKey]);
       return;
     }
@@ -54,6 +55,7 @@ export default function AISummaryPanel({
       const res = await api.post("/ai/summary", {
         book_id: bookId,
         chapter_number: chapterNumber,
+        force_refresh: forceRefresh,
       });
       const content = res.data.content;
       chapterCacheRef.current[cacheKey] = content;
@@ -70,12 +72,13 @@ export default function AISummaryPanel({
     }
   };
 
-  const handleProgressSummary = async () => {
+  const handleProgressSummary = async (forceRefresh = false) => {
     setLoading(true);
     setError("");
     try {
       const res = await api.post("/ai/summary-progress", {
         book_id: bookId,
+        force_refresh: forceRefresh,
       });
       setProgressSummary(res.data.content);
     } catch (err: any) {
@@ -142,7 +145,7 @@ export default function AISummaryPanel({
 
             <Button
               variant="contained"
-              onClick={handleChapterSummary}
+              onClick={() => handleChapterSummary()}
               disabled={loading}
               fullWidth
               sx={{ mb: 2 }}
@@ -158,12 +161,24 @@ export default function AISummaryPanel({
             </Button>
 
             {chapterSummary && (
-              <Typography
-                variant="body2"
-                sx={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}
-              >
-                {chapterSummary}
-              </Typography>
+              <>
+                <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    onClick={() => handleChapterSummary(true)}
+                    disabled={loading}
+                    title={t("regenerate")}
+                  >
+                    <RefreshIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                <Typography
+                  variant="body2"
+                  sx={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}
+                >
+                  {chapterSummary}
+                </Typography>
+              </>
             )}
 
             {/* TextRank key sentences */}
@@ -176,7 +191,7 @@ export default function AISummaryPanel({
           <>
             <Button
               variant="contained"
-              onClick={handleProgressSummary}
+              onClick={() => handleProgressSummary()}
               disabled={loading}
               fullWidth
               sx={{ mb: 2 }}
@@ -192,12 +207,24 @@ export default function AISummaryPanel({
             </Button>
 
             {progressSummary && (
-              <Typography
-                variant="body2"
-                sx={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}
-              >
-                {progressSummary}
-              </Typography>
+              <>
+                <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    onClick={() => handleProgressSummary(true)}
+                    disabled={loading}
+                    title={t("regenerate")}
+                  >
+                    <RefreshIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                <Typography
+                  variant="body2"
+                  sx={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}
+                >
+                  {progressSummary}
+                </Typography>
+              </>
             )}
           </>
         )}

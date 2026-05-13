@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -57,26 +57,20 @@ async def _get_cached_summary(
 async def _save_cached_summary(
     db: AsyncSession, book_id: int, chapter_number: int, summary_type: str, content: str
 ) -> None:
-    """Save or update a summary in the cache."""
-    # Delete old entry if exists
-    result = await db.execute(
-        select(SummaryCache).where(
+    """Save or update a summary in the cache (upsert via DELETE + INSERT)."""
+    await db.execute(
+        delete(SummaryCache).where(
             SummaryCache.book_id == book_id,
             SummaryCache.chapter_number == chapter_number,
             SummaryCache.summary_type == summary_type,
         )
     )
-    old = result.scalar_one_or_none()
-    if old:
-        await db.delete(old)
-
-    cache_entry = SummaryCache(
+    db.add(SummaryCache(
         book_id=book_id,
         chapter_number=chapter_number,
         summary_type=summary_type,
         content=content,
-    )
-    db.add(cache_entry)
+    ))
     await db.commit()
 
 
@@ -87,11 +81,20 @@ async def generate_summary(
     current_user: User = Depends(get_current_user),
 ):
     """Summarize a specific chapter (with caching)."""
-    # Check cache first
-    cached = await _get_cached_summary(db, data.book_id, data.chapter_number, "chapter")
-    if cached:
-        logger.info("Cache hit for book %d chapter %d summary", data.book_id, data.chapter_number)
-        return AIResponse(content=cached)
+    # Check cache first (skip if force_refresh)
+    if not data.force_refresh:
+        cached = await _get_cached_summary(db, data.book_id, data.chapter_number, "chapter")
+        if cached:
+            logger.info("Cache hit for book %d chapter %d summary", data.book_id, data.chapter_number)
+            return AIResponse(content=cached)
+
+    # Fetch book language
+    book = await db.get(Book, data.book_id)
+    if not book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+    language = (book.language or "en")[:2].lower()
+    if language not in ("en", "ru", "kk"):
+        language = "en"
 
     # Fetch chapter
     stmt = select(Chapter).where(
@@ -110,7 +113,7 @@ async def generate_summary(
     try:
         summary = await summarize_chapter(
             chapter.content,
-            language=current_user.language_pref or "en",
+            language=language,
         )
         # Save to cache
         await _save_cached_summary(db, data.book_id, data.chapter_number, "chapter", summary)
@@ -140,10 +143,11 @@ async def generate_progress_summary(
     current_chapter = progress.current_chapter if progress else 1
 
     # Check cache — use current_chapter as the chapter_number for progress summaries
-    cached = await _get_cached_summary(db, data.book_id, current_chapter, "progress")
-    if cached:
-        logger.info("Cache hit for book %d progress summary (ch %d)", data.book_id, current_chapter)
-        return AIResponse(content=cached)
+    if not data.force_refresh:
+        cached = await _get_cached_summary(db, data.book_id, current_chapter, "progress")
+        if cached:
+            logger.info("Cache hit for book %d progress summary (ch %d)", data.book_id, current_chapter)
+            return AIResponse(content=cached)
 
     # Fetch all chapters up to current
     stmt = (
@@ -165,10 +169,18 @@ async def generate_progress_summary(
 
     chapter_texts = [ch.content for ch in chapters]
 
+    # Use book language
+    book = await db.get(Book, data.book_id)
+    language = "en"
+    if book:
+        language = (book.language or "en")[:2].lower()
+        if language not in ("en", "ru", "kk"):
+            language = "en"
+
     try:
         summary = await summarize_progress(
             chapter_texts,
-            language=current_user.language_pref or "en",
+            language=language,
         )
         # Save to cache
         await _save_cached_summary(db, data.book_id, current_chapter, "progress", summary)
@@ -195,17 +207,40 @@ async def chat(
         )
 
     indexed = await is_book_indexed(data.book_id, db)
+
     if not indexed:
-        raise HTTPException(
-            status_code=status.HTTP_202_ACCEPTED,
-            detail="Book is being indexed, please try again shortly.",
+        # Fallback: answer from first few chapters directly (no vector search)
+        stmt = (
+            select(Chapter)
+            .where(Chapter.book_id == data.book_id)
+            .order_by(Chapter.chapter_number)
+            .limit(5)
         )
+        fallback_chapters = (await db.execute(stmt)).scalars().all()
+        if not fallback_chapters:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No content found for this book.")
+        context = "\n\n".join(
+            f"[Chapter {ch.chapter_number}: {ch.title}]\n{ch.content[:1500]}"
+            for ch in fallback_chapters
+        )
+        from app.services.ai_service import _call_ollama, _get_prompt
+        system = (
+            "You are a book reading assistant. Answer the user's question based on the provided book excerpts. "
+            "IMPORTANT: Respond in the same language the user used to ask the question. "
+            "Do NOT show your reasoning. Output only the final answer."
+        )
+        user_msg = f"Book excerpts:\n{context}\n\nQuestion: {data.message}"
+        try:
+            answer = await _call_ollama(system, user_msg, long=True)
+            return ChatResponse(answer=answer, sources=[])
+        except OllamaError as e:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
     try:
         answer, sources = await chat_about_book(
             question=data.message,
             book_id=data.book_id,
-            language=current_user.language_pref or "en",
+            language="en",  # prompt is language-agnostic — model follows question language
         )
         return ChatResponse(answer=answer, sources=sources)
     except OllamaError as e:
@@ -230,18 +265,45 @@ async def chat_stream(
         )
 
     indexed = await is_book_indexed(data.book_id, db)
+
     if not indexed:
-        raise HTTPException(
-            status_code=status.HTTP_202_ACCEPTED,
-            detail="Book is being indexed, please try again shortly.",
+        # Fallback: stream answer from first few chapters directly (no vector search)
+        stmt = (
+            select(Chapter)
+            .where(Chapter.book_id == data.book_id)
+            .order_by(Chapter.chapter_number)
+            .limit(5)
         )
+        fallback_chapters = (await db.execute(stmt)).scalars().all()
+        if not fallback_chapters:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No content found for this book.")
+        context = "\n\n".join(
+            f"[Chapter {ch.chapter_number}: {ch.title}]\n{ch.content[:1500]}"
+            for ch in fallback_chapters
+        )
+        from app.services.ai_service import _call_ollama
+        system = (
+            "You are a book reading assistant. Answer the user's question based on the provided book excerpts. "
+            "IMPORTANT: Respond in the same language the user used to ask the question. "
+            "Do NOT show your reasoning. Output only the final answer."
+        )
+        user_msg = f"Book excerpts:\n{context}\n\nQuestion: {data.message}"
+
+        async def generate_fallback():
+            try:
+                answer = await _call_ollama(system, user_msg, long=True)
+                yield answer
+            except OllamaError as e:
+                yield f"[Error: {e}]"
+
+        return StreamingResponse(generate_fallback(), media_type="text/plain; charset=utf-8")
 
     async def generate():
         try:
             async for chunk in chat_about_book_stream(
                 question=data.message,
                 book_id=data.book_id,
-                language=current_user.language_pref or "en",
+                language="en",
             ):
                 yield chunk
         except OllamaError as e:

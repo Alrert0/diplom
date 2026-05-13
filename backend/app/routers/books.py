@@ -118,6 +118,9 @@ async def upload_book(
 async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    q: str | None = None,
+    genre: str | None = None,
+    language: str | None = None,
 ):
     stmt = (
         select(
@@ -129,6 +132,14 @@ async def list_books(
         .group_by(Book.id)
         .order_by(Book.created_at.desc())
     )
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(Book.title.ilike(pattern) | Book.author.ilike(pattern))
+    if genre:
+        stmt = stmt.where(Book.genre.ilike(f"%{genre}%"))
+    if language:
+        stmt = stmt.where(Book.language == language)
+
     result = await db.execute(stmt)
     rows = result.all()
 

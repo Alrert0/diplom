@@ -36,6 +36,26 @@ import WordPopup from "../components/vocabulary/WordPopup";
 
 const BACKEND_URL = "http://localhost:8000";
 
+const SKIP_LABELS = new Set([
+  "contents", "table of contents", "list of illustrations", "illustrations",
+  "cover", "title page", "copyright", "index",
+  "содержание", "оглавление", "мазмұны",
+]);
+
+function flattenToc(items: NavItem[]): NavItem[] {
+  const result: NavItem[] = [];
+  for (const item of items) {
+    const label = item.label.trim().toLowerCase();
+    if (!SKIP_LABELS.has(label)) {
+      result.push(item);
+    }
+    if (item.subitems?.length) {
+      result.push(...flattenToc(item.subitems));
+    }
+  }
+  return result;
+}
+
 export default function ReaderPage() {
   const { bookId } = useParams<{ bookId: string }>();
   const { t } = useTranslation();
@@ -49,6 +69,7 @@ export default function ReaderPage() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [toc, setToc] = useState<NavItem[]>([]);
+  const [flatToc, setFlatToc] = useState<NavItem[]>([]);
   const [currentHref, setCurrentHref] = useState("");
   const [currentChapterTitle, setCurrentChapterTitle] = useState("");
   const [preferences, setPreferences] = useState<ReaderPreferences>(loadPreferences);
@@ -67,6 +88,8 @@ export default function ReaderPage() {
 
   // Reading time tracking
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
+  // DB chapter number for AI / TTS — matched by title, falls back to sequential index
+  const [currentDbChapterNum, setCurrentDbChapterNum] = useState(1);
   const [readingSpeed, setReadingSpeed] = useState(200);
   const lastPageTurnRef = useRef<number>(Date.now());
   const wordsOnPageRef = useRef(250); // rough estimate per page
@@ -148,9 +171,10 @@ export default function ReaderPage() {
 
     applyTheme(rendition, preferences);
 
-    // Load TOC
+    // Load TOC — flatten nested structure so all chapters are visible
     epubBook.loaded.navigation.then((nav) => {
       setToc(nav.toc);
+      setFlatToc(flattenToc(nav.toc));
     });
 
     // Restore saved position or display from beginning
@@ -173,37 +197,58 @@ export default function ReaderPage() {
       const cfi = location.start?.cfi;
       if (!cfi) return;
 
-      setCurrentHref(location.start?.href || "");
-
-      // Find chapter index from href
-      if (toc.length > 0 || epubRef.current) {
-        epubRef.current?.loaded.navigation.then((nav) => {
+      // Find chapter index from href using flattened TOC, then map to DB chapter number
+      if (epubRef.current) {
+        epubRef.current.loaded.navigation.then((nav) => {
+          const flat = flattenToc(nav.toc);
           const href = location.start?.href || "";
-          const idx = nav.toc.findIndex(
+          const idx = flat.findIndex(
             (item) => href.includes(item.href.split("#")[0])
           );
           if (idx >= 0) {
             setCurrentChapterIndex(idx);
-            setCurrentChapterTitle(nav.toc[idx].label.trim());
+            setCurrentHref(flat[idx].href);
+            const label = flat[idx].label.trim();
+            setCurrentChapterTitle(label);
+
+            // Map epub.js TOC label → DB chapter_number by title substring match
+            const labelLow = label.toLowerCase();
+            const match = chapters.find((ch) => {
+              const t = (ch.title || "").toLowerCase();
+              return (
+                t.length > 3 &&
+                labelLow.length > 3 &&
+                (labelLow.includes(t.slice(0, 20)) || t.includes(labelLow.slice(0, 20)))
+              );
+            });
+            const VOLUME_RE = /^(volume|part|book|том|часть|книга)\s/i;
+            const contentIdx = flat
+              .slice(0, idx + 1)
+              .filter((item) => !VOLUME_RE.test(item.label.trim()))
+              .length;
+            const dbChapterNum =
+              match?.chapter_number ??
+              chapters[contentIdx - 1]?.chapter_number ??
+              1;
+            setCurrentDbChapterNum(dbChapterNum);
+
+            // Save progress with the freshly computed chapter number (avoids stale closure)
+            saveProgress(cfi, dbChapterNum - 1);
           }
         });
       }
 
       // Measure reading speed from page turns
       const now = Date.now();
-      const elapsed = (now - lastPageTurnRef.current) / 1000; // seconds
+      const elapsed = (now - lastPageTurnRef.current) / 1000;
       if (elapsed > 2 && elapsed < 300) {
         const speed = (wordsOnPageRef.current / elapsed) * 60;
         setReadingSpeed((prev) => {
-          // Exponential moving average to smooth the speed
           const smoothed = prev * 0.7 + speed * 0.3;
           return Math.max(50, Math.min(1000, smoothed));
         });
       }
       lastPageTurnRef.current = now;
-
-      // Save progress (debounced)
-      saveProgress(cfi, currentChapterIndex);
     });
 
     // Keyboard navigation
@@ -382,7 +427,7 @@ export default function ReaderPage() {
           </Typography>
 
           {/* Chapter dropdown */}
-          {toc.length > 0 && (
+          {flatToc.length > 0 && (
             <Select
               value={currentHref || ""}
               onChange={handleChapterSelect}
@@ -397,7 +442,7 @@ export default function ReaderPage() {
                 ".MuiSvgIcon-root": { color: "white" },
               }}
             >
-              {toc.map((item) => (
+              {flatToc.map((item) => (
                 <MenuItem key={item.href} value={item.href}>
                   {item.label.trim()}
                 </MenuItem>
@@ -519,7 +564,7 @@ export default function ReaderPage() {
         open={activePanel === "summary"}
         onClose={() => setActivePanel(null)}
         bookId={parseInt(bookId!, 10)}
-        chapterNumber={currentChapterIndex + 1}
+        chapterNumber={currentDbChapterNum}
       />
       <AIChatPanel
         open={activePanel === "chat"}
@@ -531,7 +576,7 @@ export default function ReaderPage() {
       {activePanel === "audio" && (
         <AudioPlayer
           bookId={parseInt(bookId!, 10)}
-          chapterNumber={currentChapterIndex + 1}
+          chapterNumber={currentDbChapterNum}
           language={book.language || "en"}
           onClose={() => setActivePanel(null)}
         />

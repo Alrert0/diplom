@@ -13,6 +13,11 @@ import {
   CircularProgress,
   Chip,
   Avatar,
+  LinearProgress,
+  Card,
+  CardActionArea,
+  CardMedia,
+  CardContent,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
@@ -21,25 +26,23 @@ import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import StarIcon from "@mui/icons-material/Star";
 import GroupIcon from "@mui/icons-material/Group";
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
   Legend,
-  LineChart,
-  Line,
+  Tooltip,
+  ResponsiveContainer,
   ScatterChart,
   Scatter,
+  XAxis,
+  YAxis,
   ZAxis,
+  CartesianGrid,
 } from "recharts";
 import api from "../services/api";
 import useAuthStore from "../store/authStore";
+
+const BACKEND_URL = "http://localhost:8000";
 
 interface UserStats {
   total_books: number;
@@ -50,6 +53,17 @@ interface UserStats {
   total_ratings: number;
   avg_rating_given: number;
   cluster: number | null;
+}
+
+interface BookProgress {
+  book_id: number;
+  title: string;
+  author: string;
+  cover_url: string | null;
+  current_chapter: number;
+  total_chapters: number;
+  percent: number;
+  last_read_at: string | null;
 }
 
 interface ClusterData {
@@ -64,12 +78,10 @@ const CLUSTER_NAMES: Record<number, { en: string; ru: string; kk: string }> = {
   3: { en: "Diverse Explorer", ru: "Разносторонний исследователь", kk: "Алуан қырлы зерттеуші" },
   4: { en: "Genre Specialist", ru: "Жанровый специалист", kk: "Жанр маманы" },
   5: { en: "Avid Critic", ru: "Заядлый критик", kk: "Белсенді сыншы" },
-  6: { en: "Night Owl", ru: "Полуночник", kk: "Түнгі құс" },
-  7: { en: "Weekend Warrior", ru: "Читатель выходного дня", kk: "Демалыс оқырманы" },
 };
 
 const PIE_COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff7c7c", "#8dd1e1", "#a4de6c", "#d084d0", "#ffb347"];
-const CLUSTER_COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff7c7c", "#8dd1e1", "#a4de6c", "#d084d0", "#ffb347"];
+const CLUSTER_COLORS = PIE_COLORS;
 
 export default function ProfilePage() {
   const { t, i18n } = useTranslation();
@@ -77,6 +89,7 @@ export default function ProfilePage() {
   const { user } = useAuthStore();
 
   const [stats, setStats] = useState<UserStats | null>(null);
+  const [inProgress, setInProgress] = useState<BookProgress[]>([]);
   const [clusterData, setClusterData] = useState<ClusterData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -85,11 +98,13 @@ export default function ProfilePage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, clusterRes] = await Promise.allSettled([
+        const [statsRes, progressRes, clusterRes] = await Promise.allSettled([
           api.get("/reading/stats"),
+          api.get("/reading/in-progress"),
           api.get("/ml/clustering-visualization"),
         ]);
         if (statsRes.status === "fulfilled") setStats(statsRes.value.data);
+        if (progressRes.status === "fulfilled") setInProgress(progressRes.value.data);
         if (clusterRes.status === "fulfilled") setClusterData(clusterRes.value.data);
       } finally {
         setLoading(false);
@@ -104,34 +119,11 @@ export default function ProfilePage() {
     return names[lang] || names.en;
   };
 
-  // Mock genre distribution from stats (we'd need a separate endpoint for real data)
-  const genreData = [
-    { name: "Fiction", value: 40 },
-    { name: "Science", value: 20 },
-    { name: "History", value: 15 },
-    { name: "Fantasy", value: 15 },
-    { name: "Other", value: 10 },
-  ];
-
-  // Mock monthly reading data
-  const monthlyData = [
-    { month: "Oct", books: 2 },
-    { month: "Nov", books: 3 },
-    { month: "Dec", books: 1 },
-    { month: "Jan", books: 4 },
-    { month: "Feb", books: 2 },
-    { month: "Mar", books: 3 },
-  ];
-
-  // Mock speed over time
-  const speedData = [
-    { session: 1, wpm: 180 },
-    { session: 5, wpm: 195 },
-    { session: 10, wpm: 210 },
-    { session: 15, wpm: 220 },
-    { session: 20, wpm: 235 },
-    { session: 25, wpm: 240 },
-  ];
+  const genreData = (() => {
+    const counts: Record<string, number> = {};
+    inProgress.forEach(() => {});
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  })();
 
   if (loading) {
     return (
@@ -181,113 +173,90 @@ export default function ProfilePage() {
             <Paper sx={{ p: 2, textAlign: "center" }}>
               <MenuBookIcon color="primary" sx={{ fontSize: 32 }} />
               <Typography variant="h4">{stats?.total_books ?? 0}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {t("books_read")}
-              </Typography>
+              <Typography variant="caption" color="text.secondary">{t("books_read")}</Typography>
             </Paper>
           </Grid>
           <Grid size={{ xs: 6, sm: 3 }}>
             <Paper sx={{ p: 2, textAlign: "center" }}>
               <AccessTimeIcon color="primary" sx={{ fontSize: 32 }} />
               <Typography variant="h4">{stats?.total_reading_hours ?? 0}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {t("hours_read")}
-              </Typography>
+              <Typography variant="caption" color="text.secondary">{t("hours_read")}</Typography>
             </Paper>
           </Grid>
           <Grid size={{ xs: 6, sm: 3 }}>
             <Paper sx={{ p: 2, textAlign: "center" }}>
               <SpeedIcon color="primary" sx={{ fontSize: 32 }} />
               <Typography variant="h4">{stats?.avg_speed_wpm ?? 200}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {t("avg_wpm")}
-              </Typography>
+              <Typography variant="caption" color="text.secondary">{t("avg_wpm")}</Typography>
             </Paper>
           </Grid>
           <Grid size={{ xs: 6, sm: 3 }}>
             <Paper sx={{ p: 2, textAlign: "center" }}>
               <StarIcon color="primary" sx={{ fontSize: 32 }} />
               <Typography variant="h4">{stats?.avg_rating_given?.toFixed(1) ?? "—"}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {t("avg_rating_given")}
-              </Typography>
+              <Typography variant="caption" color="text.secondary">{t("avg_rating_given")}</Typography>
             </Paper>
           </Grid>
         </Grid>
 
+        {/* Currently reading */}
+        {inProgress.length > 0 && (
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              {t("currently_reading")}
+            </Typography>
+            <Grid container spacing={2}>
+              {inProgress.map((item) => (
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={item.book_id}>
+                  <Card variant="outlined">
+                    <CardActionArea
+                      onClick={() => navigate(`/read/${item.book_id}`)}
+                      sx={{ display: "flex", alignItems: "flex-start", p: 1, gap: 1.5 }}
+                    >
+                      <CardMedia
+                        component="img"
+                        image={item.cover_url ? `${BACKEND_URL}${item.cover_url}` : "/placeholder-cover.png"}
+                        alt={item.title}
+                        sx={{ width: 60, height: 90, objectFit: "cover", borderRadius: 1, flexShrink: 0 }}
+                      />
+                      <CardContent sx={{ p: 0, flex: 1, minWidth: 0 }}>
+                        <Typography variant="subtitle2" noWrap title={item.title}>
+                          {item.title}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {item.author}
+                        </Typography>
+                        <Box sx={{ mt: 1 }}>
+                          <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+                            <Typography variant="caption" color="text.secondary">
+                              {t("chapter")} {item.current_chapter}/{item.total_chapters}
+                            </Typography>
+                            <Typography variant="caption" color="primary" fontWeight={600}>
+                              {item.percent}%
+                            </Typography>
+                          </Box>
+                          <LinearProgress
+                            variant="determinate"
+                            value={item.percent}
+                            sx={{ borderRadius: 2, height: 6 }}
+                          />
+                        </Box>
+                      </CardContent>
+                    </CardActionArea>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        )}
+
         {/* Charts */}
         <Grid container spacing={3}>
-          {/* Books per month */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                {t("books_per_month")}
-              </Typography>
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={monthlyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="books" fill="#8884d8" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Paper>
-          </Grid>
-
-          {/* Genre distribution */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                {t("genre_distribution")}
-              </Typography>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={genreData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={80}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  >
-                    {genreData.map((_, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </Paper>
-          </Grid>
-
-          {/* Reading speed over time */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                {t("speed_over_time")}
-              </Typography>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={speedData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="session" label={{ value: t("session"), position: "insideBottom", offset: -5 }} />
-                  <YAxis label={{ value: t("wpm"), angle: -90, position: "insideLeft" }} />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="wpm" stroke="#82ca9d" strokeWidth={2} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </Paper>
-          </Grid>
-
           {/* Cluster visualization */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                {t("reader_clusters")}
-              </Typography>
-              {clusterData && clusterData.points.length > 0 ? (
+          {clusterData && clusterData.points.length > 0 && (
+            <Grid size={{ xs: 12, md: 6 }}>
+              <Paper sx={{ p: 2 }}>
+                <Typography variant="h6" gutterBottom>{t("reader_clusters")}</Typography>
                 <ResponsiveContainer width="100%" height={250}>
                   <ScatterChart>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -311,13 +280,41 @@ export default function ProfilePage() {
                     <Legend />
                   </ScatterChart>
                 </ResponsiveContainer>
-              ) : (
-                <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
-                  {t("not_enough_data_for_clusters")}
-                </Typography>
-              )}
-            </Paper>
-          </Grid>
+              </Paper>
+            </Grid>
+          )}
+
+          {/* Genre pie — only show if we have real data */}
+          {genreData.length > 0 && (
+            <Grid size={{ xs: 12, md: 6 }}>
+              <Paper sx={{ p: 2 }}>
+                <Typography variant="h6" gutterBottom>{t("genre_distribution")}</Typography>
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie data={genreData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      {genreData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </Paper>
+            </Grid>
+          )}
+
+          {/* Empty state when no reading activity */}
+          {inProgress.length === 0 && !clusterData?.points?.length && (
+            <Grid size={{ xs: 12 }}>
+              <Paper sx={{ p: 4, textAlign: "center" }}>
+                <MenuBookIcon sx={{ fontSize: 64, color: "text.disabled", mb: 1 }} />
+                <Typography color="text.secondary">{t("no_reading_activity")}</Typography>
+                <Button variant="contained" sx={{ mt: 2 }} onClick={() => navigate("/library")}>
+                  {t("go_to_library")}
+                </Button>
+              </Paper>
+            </Grid>
+          )}
         </Grid>
       </Container>
     </Box>
