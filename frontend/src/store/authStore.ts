@@ -6,6 +6,7 @@ interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
+  hydrated: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (
     email: string,
@@ -21,6 +22,7 @@ const useAuthStore = create<AuthState>((set) => ({
   user: null,
   token: null,
   isAuthenticated: false,
+  hydrated: false,
 
   login: async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
@@ -56,11 +58,14 @@ const useAuthStore = create<AuthState>((set) => ({
     if (token && userStr) {
       try {
         const user = JSON.parse(userStr) as User;
-        set({ token, user, isAuthenticated: true });
+        set({ token, user, isAuthenticated: true, hydrated: true });
       } catch {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
+        set({ hydrated: true });
       }
+    } else {
+      set({ hydrated: true });
     }
   },
 }));

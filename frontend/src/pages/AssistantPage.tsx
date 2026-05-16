@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  AppBar,
-  Toolbar,
   Typography,
   Box,
   TextField,
@@ -13,11 +10,11 @@ import {
   CircularProgress,
   Avatar,
 } from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import SendIcon from "@mui/icons-material/Send";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import PersonIcon from "@mui/icons-material/Person";
 import api from "../services/api";
+import AppLayout from "../components/layout/AppLayout";
 
 const API_BASE = "http://localhost:8000/api";
 
@@ -28,7 +25,6 @@ interface Message {
 
 export default function AssistantPage() {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -125,21 +121,21 @@ export default function AssistantPage() {
   };
 
   return (
-    <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", bgcolor: "grey.50" }}>
-      <AppBar position="static">
-        <Toolbar>
-          <IconButton color="inherit" edge="start" onClick={() => navigate(-1)} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-          <SmartToyIcon sx={{ mr: 1 }} />
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            {t("ai_assistant")}
-          </Typography>
-        </Toolbar>
-      </AppBar>
+    <AppLayout>
+      <Box sx={{ height: "calc(100vh - 0px)", display: "flex", flexDirection: "column" }}>
+        {/* Header */}
+        <Box sx={{ px: 3, py: 2, borderBottom: "1px solid", borderColor: "grey.100", bgcolor: "#fff", display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: "#f4f4f5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <SmartToyIcon sx={{ color: "#000", fontSize: 20 }} />
+          </Box>
+          <Box>
+            <Typography fontWeight={700} fontSize={16}>{t("ai_assistant")}</Typography>
+            <Typography variant="caption" color="text.secondary">{t("assistant_description")}</Typography>
+          </Box>
+        </Box>
 
       {/* Messages area */}
-      <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
+      <Box sx={{ flex: 1, overflow: "auto", p: 2, bgcolor: "#F0F2F5" }}>
         {messages.length === 0 && (
           <Box sx={{ textAlign: "center", mt: 8 }}>
             <SmartToyIcon sx={{ fontSize: 64, color: "grey.400", mb: 2 }} />
@@ -219,37 +215,31 @@ export default function AssistantPage() {
       </Box>
 
       {/* Input area */}
-      <Paper
-        elevation={3}
-        sx={{
-          p: 2,
-          borderTop: 1,
-          borderColor: "divider",
-          display: "flex",
-          gap: 1,
-          alignItems: "flex-end",
-        }}
-      >
-        <TextField
-          fullWidth
-          multiline
-          maxRows={4}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t("assistant_placeholder")}
-          variant="outlined"
-          size="small"
-          disabled={loading}
-        />
-        <IconButton
-          color="primary"
-          onClick={() => sendMessage(input)}
-          disabled={!input.trim() || loading}
-        >
-          <SendIcon />
-        </IconButton>
-      </Paper>
-    </Box>
+      <Box sx={{ p: 2, bgcolor: "#fff", borderTop: "1px solid", borderColor: "grey.100" }}>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "flex-end", maxWidth: 800, mx: "auto" }}>
+          <TextField
+            fullWidth
+            multiline
+            maxRows={4}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={t("assistant_placeholder")}
+            variant="outlined"
+            size="small"
+            disabled={loading}
+            sx={{ "& .MuiOutlinedInput-root": { borderRadius: 3, bgcolor: "#F0F2F5" } }}
+          />
+          <IconButton
+            onClick={() => sendMessage(input)}
+            disabled={!input.trim() || loading}
+            sx={{ bgcolor: "#000", color: "#fff", borderRadius: 2, "&:hover": { bgcolor: "#1a1a1a" }, "&.Mui-disabled": { bgcolor: "grey.300" } }}
+          >
+            <SendIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </Box>
+      </Box>
+    </AppLayout>
   );
 }

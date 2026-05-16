@@ -126,7 +126,7 @@ async def get_reading_time_estimate(
     book = result.scalar_one_or_none()
 
     if not chapter or not book:
-        return {"chapter_minutes": 0, "book_minutes": 0, "wpm": DEFAULT_WPM}
+        return {"chapter_minutes": 0, "book_minutes": 0, "wpm": DEFAULT_WPM, "has_sessions": False}
 
     # Get user's average reading speed from sessions
     result = await db.execute(
@@ -170,6 +170,7 @@ async def get_reading_time_estimate(
         "wpm": round(wpm, 1),
         "chapter_words": chapter.word_count,
         "book_words_remaining": book_words_left,
+        "has_sessions": total_sessions > 0,
     }
 
 
@@ -209,6 +210,15 @@ async def get_user_stats(user_id: int, db: AsyncSession) -> dict:
     total_ratings = row[0] or 0
     avg_rating = float(row[1]) if row[1] else 0.0
 
+    # Genre distribution — books the user has read progress on
+    result = await db.execute(
+        select(Book.genre, func.count(ReadingProgress.id))
+        .join(Book, Book.id == ReadingProgress.book_id)
+        .where(ReadingProgress.user_id == user_id, Book.genre.isnot(None))
+        .group_by(Book.genre)
+    )
+    genre_counts = {row[0]: row[1] for row in result.all() if row[0]}
+
     # Cluster info
     cluster = _clustering.get_cluster(user_id)
 
@@ -221,6 +231,7 @@ async def get_user_stats(user_id: int, db: AsyncSession) -> dict:
         "total_ratings": total_ratings,
         "avg_rating_given": round(avg_rating, 2),
         "cluster": cluster,
+        "genre_counts": genre_counts,
     }
 
 

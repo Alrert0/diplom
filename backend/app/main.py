@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import auth, books, ratings, chapters, ai, tts, vocabulary, recommendations, ml_metrics, book_assistant
+from app.routers import auth, books, ratings, chapters, ai, tts, vocabulary, recommendations, ml_metrics, book_assistant, highlights
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +53,15 @@ app.include_router(vocabulary.router)
 app.include_router(recommendations.router)
 app.include_router(ml_metrics.router)
 app.include_router(book_assistant.router)
+app.include_router(highlights.router)
+
+
+@app.on_event("startup")
+async def create_highlights_table():
+    from app.database import engine
+    from app.models.highlight import Highlight  # noqa: registers model
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda c: Highlight.__table__.create(c, checkfirst=True))
 
 
 @app.get("/api/health")

@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  AppBar,
-  Toolbar,
   Typography,
   Container,
   Box,
@@ -18,19 +16,28 @@ import {
   CardActionArea,
   CardMedia,
   CardContent,
+  IconButton,
+  Collapse,
+  Divider,
+  Tooltip,
 } from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import AppLayout from "../components/layout/AppLayout";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import SpeedIcon from "@mui/icons-material/Speed";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import StarIcon from "@mui/icons-material/Star";
 import GroupIcon from "@mui/icons-material/Group";
+import FormatQuoteIcon from "@mui/icons-material/FormatQuote";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { HIGHLIGHT_COLORS } from "../components/reader/HighlightPopup";
 import {
   PieChart,
   Pie,
   Cell,
   Legend,
-  Tooltip,
+  Tooltip as ChartTooltip,
   ResponsiveContainer,
   ScatterChart,
   Scatter,
@@ -53,6 +60,7 @@ interface UserStats {
   total_ratings: number;
   avg_rating_given: number;
   cluster: number | null;
+  genre_counts: Record<string, number>;
 }
 
 interface BookProgress {
@@ -69,6 +77,19 @@ interface BookProgress {
 interface ClusterData {
   points: { user_id: number; x: number; y: number; cluster: number }[];
   k: number;
+}
+
+interface HighlightWithBook {
+  id: number;
+  book_id: number;
+  cfi_range: string;
+  text: string;
+  color: string;
+  note: string | null;
+  created_at: string;
+  book_title: string;
+  book_author: string;
+  book_cover_url: string | null;
 }
 
 const CLUSTER_NAMES: Record<number, { en: string; ru: string; kk: string }> = {
@@ -91,6 +112,8 @@ export default function ProfilePage() {
   const [stats, setStats] = useState<UserStats | null>(null);
   const [inProgress, setInProgress] = useState<BookProgress[]>([]);
   const [clusterData, setClusterData] = useState<ClusterData | null>(null);
+  const [allHighlights, setAllHighlights] = useState<HighlightWithBook[]>([]);
+  const [expandedBooks, setExpandedBooks] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const lang = (i18n.language || "en").slice(0, 2) as "en" | "ru" | "kk";
@@ -98,14 +121,21 @@ export default function ProfilePage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, progressRes, clusterRes] = await Promise.allSettled([
+        const [statsRes, progressRes, clusterRes, hlRes] = await Promise.allSettled([
           api.get("/reading/stats"),
           api.get("/reading/in-progress"),
           api.get("/ml/clustering-visualization"),
+          api.get("/highlights"),
         ]);
         if (statsRes.status === "fulfilled") setStats(statsRes.value.data);
         if (progressRes.status === "fulfilled") setInProgress(progressRes.value.data);
         if (clusterRes.status === "fulfilled") setClusterData(clusterRes.value.data);
+        if (hlRes.status === "fulfilled") {
+          setAllHighlights(hlRes.value.data || []);
+          // Auto-expand first book
+          const firstBookId = hlRes.value.data?.[0]?.book_id;
+          if (firstBookId) setExpandedBooks(new Set([firstBookId]));
+        }
       } finally {
         setLoading(false);
       }
@@ -119,11 +149,32 @@ export default function ProfilePage() {
     return names[lang] || names.en;
   };
 
-  const genreData = (() => {
-    const counts: Record<string, number> = {};
-    inProgress.forEach(() => {});
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  })();
+  const genreData = stats?.genre_counts
+    ? Object.entries(stats.genre_counts).map(([name, value]) => ({ name, value }))
+    : [];
+
+  // Group highlights by book
+  const highlightsByBook = allHighlights.reduce<Record<number, HighlightWithBook[]>>((acc, h) => {
+    if (!acc[h.book_id]) acc[h.book_id] = [];
+    acc[h.book_id].push(h);
+    return acc;
+  }, {});
+
+  const toggleBook = (bookId: number) => {
+    setExpandedBooks((prev) => {
+      const next = new Set(prev);
+      if (next.has(bookId)) next.delete(bookId);
+      else next.add(bookId);
+      return next;
+    });
+  };
+
+  const handleDeleteHighlight = async (id: number) => {
+    try {
+      await api.delete(`/highlights/${id}`);
+      setAllHighlights((prev) => prev.filter((h) => h.id !== id));
+    } catch {}
+  };
 
   if (loading) {
     return (
@@ -134,17 +185,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "grey.50" }}>
-      <AppBar position="static">
-        <Toolbar>
-          <Button color="inherit" startIcon={<ArrowBackIcon />} onClick={() => navigate("/")}>
-            {t("back")}
-          </Button>
-          <Typography variant="h6" sx={{ flexGrow: 1, ml: 2 }}>
-            {t("profile")}
-          </Typography>
-        </Toolbar>
-      </AppBar>
+    <AppLayout>
 
       <Container sx={{ py: 4 }}>
         {/* User header */}
@@ -250,6 +291,131 @@ export default function ProfilePage() {
           </Paper>
         )}
 
+        {/* My Highlights / Quotes */}
+        {allHighlights.length > 0 && (
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+              <FormatQuoteIcon color="primary" />
+              <Typography variant="h6">
+                {t("my_highlights")} ({allHighlights.length})
+              </Typography>
+            </Box>
+
+            {Object.entries(highlightsByBook).map(([bookIdStr, items]) => {
+              const bookId = parseInt(bookIdStr);
+              const first = items[0];
+              const isExpanded = expandedBooks.has(bookId);
+
+              return (
+                <Box key={bookId} sx={{ mb: 1.5 }}>
+                  {/* Book header row */}
+                  <Box
+                    onClick={() => toggleBook(bookId)}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1.5,
+                      p: 1.5,
+                      borderRadius: 2,
+                      cursor: "pointer",
+                      bgcolor: "#f8f8f8",
+                      "&:hover": { bgcolor: "#f0f0f0" },
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={first.book_cover_url ? `${BACKEND_URL}${first.book_cover_url}` : "/placeholder-cover.png"}
+                      alt={first.book_title}
+                      sx={{ width: 36, height: 54, objectFit: "cover", borderRadius: 1, flexShrink: 0 }}
+                    />
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="subtitle2" noWrap fontWeight={600}>
+                        {first.book_title}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        {first.book_author}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      label={items.length}
+                      size="small"
+                      sx={{ bgcolor: "#000", color: "#fff", fontWeight: 700, minWidth: 28 }}
+                    />
+                    <IconButton size="small">
+                      {isExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                    </IconButton>
+                  </Box>
+
+                  {/* Highlights list */}
+                  <Collapse in={isExpanded}>
+                    <Box sx={{ pl: 2, pt: 1, pb: 0.5 }}>
+                      {items.map((h, i) => {
+                        const colorInfo = HIGHLIGHT_COLORS[h.color] || HIGHLIGHT_COLORS.yellow;
+                        return (
+                          <Box key={h.id}>
+                            <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5, py: 1.5 }}>
+                              {/* Color strip */}
+                              <Box
+                                sx={{
+                                  width: 4,
+                                  minHeight: 36,
+                                  borderRadius: 2,
+                                  bgcolor: colorInfo.hex,
+                                  flexShrink: 0,
+                                  mt: 0.5,
+                                }}
+                              />
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    lineHeight: 1.7,
+                                    bgcolor: colorInfo.hex + "44",
+                                    px: 1.5,
+                                    py: 0.75,
+                                    borderRadius: 1.5,
+                                    cursor: "pointer",
+                                    "&:hover": { opacity: 0.85 },
+                                  }}
+                                  onClick={() => navigate(`/read/${h.book_id}`)}
+                                >
+                                  "{h.text}"
+                                </Typography>
+                                <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: "block" }}>
+                                  {new Date(h.created_at).toLocaleDateString()}
+                                </Typography>
+                              </Box>
+                              <Tooltip title={t("delete")}>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => handleDeleteHighlight(h.id)}
+                                  sx={{ color: "text.disabled", "&:hover": { color: "error.main" }, flexShrink: 0 }}
+                                >
+                                  <DeleteIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+                            {i < items.length - 1 && <Divider sx={{ ml: 2 }} />}
+                          </Box>
+                        );
+                      })}
+                      <Box sx={{ pb: 0.5 }}>
+                        <Button
+                          size="small"
+                          onClick={() => navigate(`/read/${bookId}`)}
+                          sx={{ color: "text.secondary", fontSize: 12 }}
+                        >
+                          {t("open_book")} →
+                        </Button>
+                      </Box>
+                    </Box>
+                  </Collapse>
+                </Box>
+              );
+            })}
+          </Paper>
+        )}
+
         {/* Charts */}
         <Grid container spacing={3}>
           {/* Cluster visualization */}
@@ -263,7 +429,7 @@ export default function ProfilePage() {
                     <XAxis dataKey="x" name="t-SNE 1" type="number" />
                     <YAxis dataKey="y" name="t-SNE 2" type="number" />
                     <ZAxis range={[40, 40]} />
-                    <Tooltip
+                    <ChartTooltip
                       formatter={(_: unknown, name: string, props: { payload?: { user_id?: number; cluster?: number } }) => {
                         if (name === "x") return [props.payload?.user_id, "User"];
                         return [props.payload?.cluster, "Cluster"];
@@ -295,7 +461,7 @@ export default function ProfilePage() {
                       label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                       {genreData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                     </Pie>
-                    <Tooltip />
+                    <ChartTooltip />
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
@@ -317,6 +483,6 @@ export default function ProfilePage() {
           )}
         </Grid>
       </Container>
-    </Box>
+    </AppLayout>
   );
 }

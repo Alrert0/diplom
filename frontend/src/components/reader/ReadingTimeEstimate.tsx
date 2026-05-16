@@ -18,6 +18,9 @@ interface ApiEstimate {
   chapter_minutes: number;
   book_minutes: number;
   wpm: number;
+  chapter_words: number;
+  book_words_remaining: number;
+  has_sessions: boolean;
 }
 
 export default function ReadingTimeEstimate({
@@ -41,15 +44,23 @@ export default function ReadingTimeEstimate({
       .catch(() => setMlEstimate(null));
   }, [bookId, chapterNumber]);
 
-  // Use ML estimate if available, otherwise fall back to local calculation
-  const personalized = mlEstimate !== null;
-  const wpm = personalized ? mlEstimate.wpm : readingSpeed > 0 ? readingSpeed : 200;
-  const chapterMinutes = personalized
-    ? mlEstimate.chapter_minutes
-    : Math.max(1, Math.round(chapterWordsLeft / wpm));
-  const bookHours = personalized
-    ? (mlEstimate.book_minutes / 60).toFixed(1)
-    : (bookWordsLeft / wpm / 60).toFixed(1);
+  // Use ML speed only if user has real session history.
+  // Otherwise use the live page-turn measurement.
+  const hasRealData = mlEstimate?.has_sessions === true;
+  const wpm = hasRealData
+    ? mlEstimate!.wpm
+    : readingSpeed > 0
+    ? readingSpeed
+    : 200;
+
+  const chapterMinutes = hasRealData
+    ? mlEstimate!.chapter_minutes
+    : Math.max(1, Math.round((mlEstimate?.chapter_words ?? chapterWordsLeft) / wpm));
+  const bookHours = hasRealData
+    ? (mlEstimate!.book_minutes / 60).toFixed(1)
+    : ((mlEstimate?.book_words_remaining ?? bookWordsLeft) / wpm / 60).toFixed(1);
+
+  const personalized = hasRealData;
 
   return (
     <Box

@@ -73,12 +73,40 @@ async def get_book_ratings(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
 
     stmt = (
-        select(Rating)
+        select(Rating, User.username)
+        .join(User, User.id == Rating.user_id)
         .where(Rating.book_id == book_id)
         .order_by(Rating.created_at.desc())
     )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    rows = result.all()
+
+    ratings = []
+    for rating, username in rows:
+        r = RatingResponse.model_validate(rating)
+        r.username = username
+        ratings.append(r)
+    return ratings
+
+
+@router.get("/my/{book_id}", response_model=RatingResponse | None)
+async def get_my_rating(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the current user's rating for a specific book."""
+    stmt = select(Rating).where(
+        Rating.user_id == current_user.id,
+        Rating.book_id == book_id,
+    )
+    result = await db.execute(stmt)
+    rating = result.scalar_one_or_none()
+    if not rating:
+        return None
+    r = RatingResponse.model_validate(rating)
+    r.username = current_user.username
+    return r
 
 
 @router.get("/trending", response_model=list[BookWithRating])

@@ -21,6 +21,7 @@ import SummarizeIcon from "@mui/icons-material/Summarize";
 import ChatIcon from "@mui/icons-material/Chat";
 import HeadphonesIcon from "@mui/icons-material/Headphones";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
+import FormatColorFillIcon from "@mui/icons-material/FormatColorFill";
 import api from "../services/api";
 import type { Book, Chapter } from "../types";
 import ReaderSettings, {
@@ -33,6 +34,8 @@ import AISummaryPanel from "../components/ai/AISummaryPanel";
 import AIChatPanel from "../components/ai/AIChatPanel";
 import AudioPlayer from "../components/audio/AudioPlayer";
 import WordPopup from "../components/vocabulary/WordPopup";
+import HighlightPopup, { HIGHLIGHT_COLORS, type HighlightSelection } from "../components/reader/HighlightPopup";
+import HighlightsPanel, { type HighlightItem } from "../components/reader/HighlightsPanel";
 
 const BACKEND_URL = "http://localhost:8000";
 
@@ -74,6 +77,12 @@ export default function ReaderPage() {
   const [currentChapterTitle, setCurrentChapterTitle] = useState("");
   const [preferences, setPreferences] = useState<ReaderPreferences>(loadPreferences);
 
+  // Highlights
+  const [highlights, setHighlights] = useState<HighlightItem[]>([]);
+  const [highlightSelection, setHighlightSelection] = useState<HighlightSelection | null>(null);
+  const [showHighlightsPanel, setShowHighlightsPanel] = useState(false);
+  const highlightsRef = useRef<HighlightItem[]>([]);
+
   // Only one panel open at a time: 'settings' | 'summary' | 'chat' | 'audio' | null
   type PanelType = "settings" | "summary" | "chat" | "audio" | null;
   const [activePanel, setActivePanel] = useState<PanelType>(null);
@@ -94,8 +103,30 @@ export default function ReaderPage() {
   const lastPageTurnRef = useRef<number>(Date.now());
   const wordsOnPageRef = useRef(250); // rough estimate per page
 
+  // Session tracking — measure actual time & words per chapter
+  const sessionStartRef = useRef<number>(Date.now());
+  const sessionChapterRef = useRef<{ index: number; dbNum: number }>({ index: 0, dbNum: 1 });
+
   // Debounced progress save
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const saveSession = useCallback(
+    (chapterIndex: number, dbChapterNum: number) => {
+      if (!bookId) return;
+      const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
+      // Only save if user spent at least 10 seconds on the chapter
+      if (elapsed < 10) return;
+      const ch = chapters[chapterIndex];
+      const wordsRead = ch?.word_count ?? 250;
+      api.post("/reading/session", {
+        book_id: parseInt(bookId, 10),
+        chapter_number: dbChapterNum,
+        words_read: wordsRead,
+        time_spent_seconds: elapsed,
+      }).catch(() => {});
+    },
+    [bookId, chapters]
+  );
 
   const saveProgress = useCallback(
     (cfi: string, chapterIdx: number) => {
@@ -141,13 +172,23 @@ export default function ReaderPage() {
     []
   );
 
-  // Fetch book data + chapters
+  // Keep highlightsRef in sync so epub.js event handlers can access current highlights
+  useEffect(() => {
+    highlightsRef.current = highlights;
+  }, [highlights]);
+
+  // Fetch book data + chapters + highlights
   useEffect(() => {
     if (!bookId) return;
-    Promise.all([api.get(`/books/${bookId}`), api.get(`/books/${bookId}/chapters`)])
-      .then(([bookRes, chapRes]) => {
+    Promise.all([
+      api.get(`/books/${bookId}`),
+      api.get(`/books/${bookId}/chapters`),
+      api.get(`/highlights/${bookId}`).catch(() => ({ data: [] })),
+    ])
+      .then(([bookRes, chapRes, hlRes]) => {
         setBook(bookRes.data);
         setChapters(chapRes.data);
+        setHighlights(hlRes.data || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -206,6 +247,12 @@ export default function ReaderPage() {
             (item) => href.includes(item.href.split("#")[0])
           );
           if (idx >= 0) {
+            // Save session for previous chapter before switching
+            if (idx !== sessionChapterRef.current.index) {
+              saveSession(sessionChapterRef.current.index, sessionChapterRef.current.dbNum);
+              sessionStartRef.current = Date.now();
+            }
+
             setCurrentChapterIndex(idx);
             setCurrentHref(flat[idx].href);
             const label = flat[idx].label.trim();
@@ -231,6 +278,7 @@ export default function ReaderPage() {
               chapters[contentIdx - 1]?.chapter_number ??
               1;
             setCurrentDbChapterNum(dbChapterNum);
+            sessionChapterRef.current = { index: idx, dbNum: dbChapterNum };
 
             // Save progress with the freshly computed chapter number (avoids stale closure)
             saveProgress(cfi, dbChapterNum - 1);
@@ -238,14 +286,27 @@ export default function ReaderPage() {
         });
       }
 
+      // Update words-per-page estimate from actual chapter word count
+      if (epubRef.current) {
+        epubRef.current.loaded.navigation.then((nav) => {
+          const flat2 = flattenToc(nav.toc);
+          const href2 = location.start?.href || "";
+          const i2 = flat2.findIndex((item) => href2.includes(item.href.split("#")[0]));
+          if (i2 >= 0 && chapters[i2]) {
+            // Estimate ~15 pages per chapter → words per page
+            wordsOnPageRef.current = Math.max(100, Math.round((chapters[i2].word_count || 250) / 15));
+          }
+        });
+      }
+
       // Measure reading speed from page turns
       const now = Date.now();
       const elapsed = (now - lastPageTurnRef.current) / 1000;
-      if (elapsed > 2 && elapsed < 300) {
+      if (elapsed > 5 && elapsed < 600) {
         const speed = (wordsOnPageRef.current / elapsed) * 60;
         setReadingSpeed((prev) => {
-          const smoothed = prev * 0.7 + speed * 0.3;
-          return Math.max(50, Math.min(1000, smoothed));
+          const smoothed = prev * 0.6 + speed * 0.4;
+          return Math.max(50, Math.min(1000, Math.round(smoothed)));
         });
       }
       lastPageTurnRef.current = now;
@@ -255,6 +316,51 @@ export default function ReaderPage() {
     rendition.on("keyup", (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") rendition.prev();
       if (e.key === "ArrowRight") rendition.next();
+    });
+
+    // Re-apply saved highlights whenever a section renders
+    rendition.on("rendered", () => {
+      highlightsRef.current.forEach((h) => {
+        try {
+          const colorInfo = HIGHLIGHT_COLORS[h.color] || HIGHLIGHT_COLORS.yellow;
+          rendition.annotations.highlight(
+            h.cfi_range,
+            { id: h.id },
+            () => {},
+            `hl-${h.id}`,
+            { fill: colorInfo.epubFill, "fill-opacity": "0.4" }
+          );
+        } catch {
+          // CFI not in this section — ignore
+        }
+      });
+    });
+
+    // Text selection → show color picker
+    rendition.on("selected", (cfiRange: string, contents: any) => {
+      const selection = contents?.window?.getSelection();
+      if (!selection || selection.isCollapsed) return;
+      const text = selection.toString().trim();
+      if (!text || text.length < 2) return;
+
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const iframe = viewerRef.current?.querySelector("iframe");
+      const iframeRect = iframe?.getBoundingClientRect() ?? { top: 0, left: 0 };
+
+      // Check if this CFI already has a highlight
+      const existing = highlightsRef.current.find((h) => h.cfi_range === cfiRange);
+
+      setHighlightSelection({
+        cfiRange,
+        text,
+        position: {
+          top: rect.bottom + iframeRect.top,
+          left: rect.left + iframeRect.left,
+        },
+        existingId: existing?.id,
+        existingColor: existing?.color,
+      });
     });
 
     // Vocabulary: handle click on words inside epub iframe
@@ -353,6 +459,13 @@ export default function ReaderPage() {
     return () => document.removeEventListener("keyup", handler);
   }, []);
 
+  // Save session when user leaves the reader page
+  useEffect(() => {
+    return () => {
+      saveSession(sessionChapterRef.current.index, sessionChapterRef.current.dbNum);
+    };
+  }, [saveSession]);
+
   const handlePrev = () => renditionRef.current?.prev();
   const handleNext = () => renditionRef.current?.next();
 
@@ -361,6 +474,73 @@ export default function ReaderPage() {
     if (href && renditionRef.current) {
       renditionRef.current.display(href);
     }
+  };
+
+  const applyHighlightAnnotation = (h: HighlightItem) => {
+    if (!renditionRef.current) return;
+    const colorInfo = HIGHLIGHT_COLORS[h.color] || HIGHLIGHT_COLORS.yellow;
+    try {
+      renditionRef.current.annotations.highlight(
+        h.cfi_range,
+        { id: h.id },
+        () => {},
+        `hl-${h.id}`,
+        { fill: colorInfo.epubFill, "fill-opacity": "0.4" }
+      );
+    } catch {
+      // CFI not currently visible — will be applied on next render
+    }
+  };
+
+  const removeHighlightAnnotation = (cfiRange: string) => {
+    try {
+      renditionRef.current?.annotations.remove(cfiRange, "highlight");
+    } catch {}
+  };
+
+  const handleSaveHighlight = async (color: string) => {
+    if (!highlightSelection || !bookId) return;
+    const { cfiRange, text, existingId } = highlightSelection;
+
+    if (existingId) {
+      // Delete old, re-create with new color
+      await handleDeleteHighlight(existingId, cfiRange);
+    }
+
+    try {
+      const res = await api.post("/highlights", {
+        book_id: parseInt(bookId, 10),
+        cfi_range: cfiRange,
+        text,
+        color,
+      });
+      const saved: HighlightItem = res.data;
+      setHighlights((prev) => [...prev.filter((h) => h.cfi_range !== cfiRange), saved]);
+      applyHighlightAnnotation(saved);
+    } catch {}
+    setHighlightSelection(null);
+  };
+
+  const handleDeleteHighlight = async (id: number, cfiRange?: string) => {
+    try {
+      await api.delete(`/highlights/${id}`);
+      const toRemove = highlights.find((h) => h.id === id);
+      if (toRemove) removeHighlightAnnotation(toRemove.cfi_range);
+      setHighlights((prev) => prev.filter((h) => h.id !== id));
+    } catch {}
+    if (cfiRange === highlightSelection?.cfiRange) setHighlightSelection(null);
+  };
+
+  const handleDeleteFromPopup = async () => {
+    if (highlightSelection?.existingId) {
+      await handleDeleteHighlight(highlightSelection.existingId, highlightSelection.cfiRange);
+    }
+    setHighlightSelection(null);
+  };
+
+  const handleJumpToHighlight = (cfiRange: string) => {
+    renditionRef.current?.display(cfiRange);
+    setShowHighlightsPanel(false);
   };
 
   // Calculate words remaining
@@ -481,6 +661,15 @@ export default function ReaderPage() {
             <HeadphonesIcon fontSize="small" />
           </IconButton>
           <IconButton
+            color={showHighlightsPanel ? "warning" : "inherit"}
+            onClick={() => setShowHighlightsPanel((v) => !v)}
+            title={t("highlights")}
+            size="small"
+            sx={{ mr: 0.5 }}
+          >
+            <FormatColorFillIcon fontSize="small" />
+          </IconButton>
+          <IconButton
             color={vocabMode ? "warning" : "inherit"}
             onClick={() => setVocabMode((v) => !v)}
             title={vocabMode ? t("vocab_mode_off") : t("vocab_mode_on")}
@@ -591,6 +780,23 @@ export default function ReaderPage() {
           setSelectedWord("");
           setPopupPosition(null);
         }}
+      />
+
+      {/* Highlight color picker popup */}
+      <HighlightPopup
+        selection={highlightSelection}
+        onSave={handleSaveHighlight}
+        onDelete={handleDeleteFromPopup}
+        onClose={() => setHighlightSelection(null)}
+      />
+
+      {/* Highlights / quotes panel */}
+      <HighlightsPanel
+        open={showHighlightsPanel}
+        onClose={() => setShowHighlightsPanel(false)}
+        highlights={highlights}
+        onDelete={(id) => handleDeleteHighlight(id)}
+        onJump={handleJumpToHighlight}
       />
     </Box>
   );

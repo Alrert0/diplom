@@ -1,15 +1,16 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
-from app.models.book import Book
-from app.models.reading import ReadingProgress
+from app.models.book import Book, Chapter
+from app.models.reading import ReadingProgress, ReadingSession
 from app.models.user import User
 from app.schemas.book import ReadingProgressUpdate, ReadingProgressResponse
 
@@ -104,6 +105,45 @@ async def update_reading_progress(
         current_user.id, data.book_id, data.current_chapter, data.current_position,
     )
     return progress
+
+
+class ReadingSessionCreate(BaseModel):
+    book_id: int
+    chapter_number: int
+    words_read: int = Field(ge=0)
+    time_spent_seconds: int = Field(ge=1)
+
+
+@router.post("/session", status_code=status.HTTP_201_CREATED)
+async def save_reading_session(
+    data: ReadingSessionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record a reading session to track user speed for ML model."""
+    chapter = (await db.execute(
+        select(Chapter).where(
+            Chapter.book_id == data.book_id,
+            Chapter.chapter_number == data.chapter_number,
+        )
+    )).scalar_one_or_none()
+
+    if not chapter:
+        return {"ok": False, "reason": "chapter not found"}
+
+    now = datetime.now(timezone.utc)
+    session = ReadingSession(
+        user_id=current_user.id,
+        book_id=data.book_id,
+        chapter_id=chapter.id,
+        words_read=data.words_read,
+        time_spent_seconds=data.time_spent_seconds,
+        session_start=now,
+        session_end=now,
+    )
+    db.add(session)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/progress/{book_id}", response_model=ReadingProgressResponse)

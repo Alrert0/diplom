@@ -1,9 +1,7 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  AppBar,
-  Toolbar,
   Typography,
   Container,
   Grid,
@@ -13,7 +11,6 @@ import {
   CardActionArea,
   Rating,
   Box,
-  Button,
   IconButton,
   CircularProgress,
   TextField,
@@ -22,87 +19,90 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Pagination,
 } from "@mui/material";
-import LogoutIcon from "@mui/icons-material/Logout";
-import HomeIcon from "@mui/icons-material/Home";
-import PersonIcon from "@mui/icons-material/Person";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
 import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
+import AppLayout from "../components/layout/AppLayout";
 import api from "../services/api";
-import useAuthStore from "../store/authStore";
-import LanguageSelector from "../components/LanguageSelector";
 import type { Book } from "../types";
 
 const BACKEND_URL = "http://localhost:8000";
+const LIMIT = 24;
+
+interface BooksPage {
+  items: Book[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+}
 
 export default function LibraryPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
-  const [books, setBooks] = useState<Book[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [genreFilter, setGenreFilter] = useState("");
-  const [langFilter, setLangFilter] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  useEffect(() => {
-    api
-      .get("/books")
-      .then((res) => setBooks(res.data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+  const [data, setData] = useState<BooksPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState(searchParams.get("q") || "");
+  const [genreFilter, setGenreFilter] = useState(searchParams.get("genre") || "");
+  const [langFilter, setLangFilter] = useState("");
+  const [page, setPage] = useState(1);
+
+  // All genres/languages for filter dropdowns (loaded once)
+  const [allGenres, setAllGenres] = useState<string[]>([]);
+  const [allLanguages, setAllLanguages] = useState<string[]>([]);
+
+  const fetchBooks = useCallback(async (p: number, q: string, genre: string, lang: string) => {
+    setLoading(true);
+    try {
+      const params: Record<string, string | number> = { page: p, limit: LIMIT };
+      if (q) params.q = q;
+      if (genre) params.genre = genre;
+      if (lang) params.language = lang;
+      const res = await api.get("/books", { params });
+      setData(res.data);
+    } catch {
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const genres = Array.from(new Set(books.map((b) => b.genre).filter(Boolean))) as string[];
-  const languages = Array.from(new Set(books.map((b) => b.language).filter(Boolean))) as string[];
+  // Load genres/languages for filters from first full fetch
+  useEffect(() => {
+    api.get("/books", { params: { page: 1, limit: 200 } }).then((res) => {
+      const items: Book[] = res.data.items || [];
+      setAllGenres(Array.from(new Set(items.map((b) => b.genre).filter(Boolean))) as string[]);
+      setAllLanguages(Array.from(new Set(items.map((b) => b.language).filter(Boolean))) as string[]);
+    }).catch(() => {});
+  }, []);
 
-  const filtered = books.filter((book) => {
-    const q = search.toLowerCase();
-    const matchSearch =
-      !q ||
-      book.title.toLowerCase().includes(q) ||
-      book.author.toLowerCase().includes(q);
-    const matchGenre = !genreFilter || book.genre === genreFilter;
-    const matchLang = !langFilter || book.language === langFilter;
-    return matchSearch && matchGenre && matchLang;
-  });
+  useEffect(() => {
+    fetchBooks(page, search, genreFilter, langFilter);
+  }, [page, genreFilter, langFilter, fetchBooks]);
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPage(1);
+      fetchBooks(1, search, genreFilter, langFilter);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const handlePageChange = (_: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const books = data?.items || [];
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "grey.50" }}>
-      <AppBar position="static">
-        <Toolbar>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            {t("app_name")}
-          </Typography>
-          <Button color="inherit" startIcon={<HomeIcon />} onClick={() => navigate("/")} sx={{ mr: 1 }}>
-            {t("home")}
-          </Button>
-          <Button color="inherit" startIcon={<SmartToyIcon />} onClick={() => navigate("/assistant")} sx={{ mr: 1 }}>
-            {t("ai_assistant")}
-          </Button>
-          <Box sx={{ mr: 1 }}>
-            <LanguageSelector />
-          </Box>
-          <IconButton color="inherit" onClick={() => navigate("/profile")} title={t("profile")}>
-            <PersonIcon />
-          </IconButton>
-          <Typography sx={{ mr: 1, ml: 0.5 }}>{user?.username}</Typography>
-          <Button
-            color="inherit"
-            onClick={() => {
-              logout();
-              navigate("/login");
-            }}
-            startIcon={<LogoutIcon />}
-          >
-            {t("logout")}
-          </Button>
-        </Toolbar>
-      </AppBar>
-
+    <AppLayout>
       <Container sx={{ py: 4 }}>
-        <Typography variant="h4" gutterBottom>
+        <Typography variant="h4" fontWeight={800} gutterBottom>
           {t("library")}
         </Typography>
 
@@ -113,7 +113,7 @@ export default function LibraryPage() {
             placeholder={t("search_books")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            sx={{ flexGrow: 1, minWidth: 200 }}
+            sx={{ flexGrow: 1, minWidth: 200, bgcolor: "#fff", "& .MuiOutlinedInput-root": { borderRadius: 2 } }}
             slotProps={{
               input: {
                 startAdornment: (
@@ -134,98 +134,94 @@ export default function LibraryPage() {
 
           <FormControl size="small" sx={{ minWidth: 130 }}>
             <InputLabel>{t("genre")}</InputLabel>
-            <Select
-              value={genreFilter}
-              label={t("genre")}
-              onChange={(e) => setGenreFilter(e.target.value)}
-            >
+            <Select value={genreFilter} label={t("genre")} onChange={(e) => { setGenreFilter(e.target.value); setPage(1); }}>
               <MenuItem value="">{t("all")}</MenuItem>
-              {genres.map((g) => (
-                <MenuItem key={g} value={g}>{g}</MenuItem>
-              ))}
+              {allGenres.map((g) => <MenuItem key={g} value={g}>{g}</MenuItem>)}
             </Select>
           </FormControl>
 
           <FormControl size="small" sx={{ minWidth: 110 }}>
             <InputLabel>{t("language")}</InputLabel>
-            <Select
-              value={langFilter}
-              label={t("language")}
-              onChange={(e) => setLangFilter(e.target.value)}
-            >
+            <Select value={langFilter} label={t("language")} onChange={(e) => { setLangFilter(e.target.value); setPage(1); }}>
               <MenuItem value="">{t("all")}</MenuItem>
-              {languages.map((l) => (
-                <MenuItem key={l} value={l}>{l.toUpperCase()}</MenuItem>
-              ))}
+              {allLanguages.map((l) => <MenuItem key={l} value={l}>{l.toUpperCase()}</MenuItem>)}
             </Select>
           </FormControl>
 
-          {(search || genreFilter || langFilter) && (
-            <Typography variant="body2" color="text.secondary">
-              {t("found_books", { count: filtered.length })}
+          {data && (
+            <Typography variant="body2" color="text.secondary" sx={{ ml: "auto" }}>
+              {t("found_books", { count: data.total })}
             </Typography>
           )}
         </Box>
 
+        {/* Books grid */}
         {loading ? (
           <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
-            <CircularProgress />
+            <CircularProgress sx={{ color: "#000" }} />
           </Box>
-        ) : filtered.length === 0 ? (
+        ) : books.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 8, textAlign: "center" }}>
             {search || genreFilter || langFilter ? t("no_results") : t("no_books")}
           </Typography>
         ) : (
-          <Grid container spacing={3}>
-            {filtered.map((book) => (
-              <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={book.id}>
-                <Card sx={{ height: "100%" }}>
-                  <CardActionArea onClick={() => navigate(`/book/${book.id}`)}>
-                    <CardMedia
-                      component="img"
-                      height="280"
-                      image={
-                        book.cover_url
-                          ? `${BACKEND_URL}${book.cover_url}`
-                          : "/placeholder-cover.png"
-                      }
-                      alt={book.title}
-                      sx={{ objectFit: "cover" }}
-                    />
-                    <CardContent>
-                      <Typography
-                        variant="subtitle2"
-                        noWrap
-                        title={book.title}
-                      >
-                        {book.title}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        noWrap
-                      >
-                        {book.author}
-                      </Typography>
-                      <Box sx={{ display: "flex", alignItems: "center", mt: 0.5 }}>
-                        <Rating
-                          value={book.avg_rating ?? 0}
-                          precision={0.5}
-                          size="small"
-                          readOnly
-                        />
-                        <Typography variant="caption" sx={{ ml: 0.5 }}>
-                          ({book.ratings_count})
+          <>
+            <Grid container spacing={2.5}>
+              {books.map((book) => (
+                <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={book.id}>
+                  <Card sx={{
+                    height: "100%",
+                    borderRadius: 3,
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
+                    transition: "transform 0.2s, box-shadow 0.2s",
+                    "&:hover": { transform: "translateY(-4px)", boxShadow: "0 8px 24px rgba(0,0,0,0.13)" },
+                  }}>
+                    <CardActionArea onClick={() => navigate(`/book/${book.id}`)}>
+                      <CardMedia
+                        component="img"
+                        height="230"
+                        image={book.cover_url ? `${BACKEND_URL}${book.cover_url}` : "/placeholder-cover.png"}
+                        alt={book.title}
+                        sx={{ objectFit: "cover" }}
+                      />
+                      <CardContent sx={{ p: 1.5, pb: "12px !important" }}>
+                        <Typography variant="subtitle2" noWrap fontWeight={600} fontSize={13} title={book.title}>
+                          {book.title}
                         </Typography>
-                      </Box>
-                    </CardContent>
-                  </CardActionArea>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
+                        <Typography variant="caption" color="text.secondary" noWrap display="block" fontSize={11}>
+                          {book.author}
+                        </Typography>
+                        <Box sx={{ display: "flex", alignItems: "center", mt: 0.5 }}>
+                          <Rating value={book.avg_rating ?? 0} precision={0.5} size="small" readOnly />
+                          <Typography variant="caption" sx={{ ml: 0.5, fontSize: 11 }}>
+                            ({book.ratings_count})
+                          </Typography>
+                        </Box>
+                      </CardContent>
+                    </CardActionArea>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+
+            {/* Pagination */}
+            {data && data.pages > 1 && (
+              <Box sx={{ display: "flex", justifyContent: "center", mt: 5 }}>
+                <Pagination
+                  count={data.pages}
+                  page={page}
+                  onChange={handlePageChange}
+                  size="large"
+                  sx={{
+                    "& .MuiPaginationItem-root": { borderRadius: 2 },
+                    "& .Mui-selected": { bgcolor: "#000 !important", color: "#fff" },
+                  }}
+                />
+              </Box>
+            )}
+          </>
         )}
       </Container>
-    </Box>
+    </AppLayout>
   );
 }

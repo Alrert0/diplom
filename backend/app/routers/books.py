@@ -1,8 +1,10 @@
 import logging
+import math
 import os
 import re
 import shutil
 import uuid
+from pydantic import BaseModel
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
@@ -114,15 +116,29 @@ async def upload_book(
     return BookWithRating.model_validate(book)
 
 
-@router.get("", response_model=list[BookWithRating])
+class BooksPage(BaseModel):
+    items: list[BookWithRating]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
+@router.get("", response_model=BooksPage)
 async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     q: str | None = None,
     genre: str | None = None,
     language: str | None = None,
+    page: int = 1,
+    limit: int = 24,
 ):
-    stmt = (
+    limit = max(1, min(limit, 100))  # clamp 1-100
+    page = max(1, page)
+    offset = (page - 1) * limit
+
+    base_stmt = (
         select(
             Book,
             func.avg(Rating.score).label("avg_rating"),
@@ -134,12 +150,18 @@ async def list_books(
     )
     if q:
         pattern = f"%{q}%"
-        stmt = stmt.where(Book.title.ilike(pattern) | Book.author.ilike(pattern))
+        base_stmt = base_stmt.where(Book.title.ilike(pattern) | Book.author.ilike(pattern))
     if genre:
-        stmt = stmt.where(Book.genre.ilike(f"%{genre}%"))
+        base_stmt = base_stmt.where(Book.genre.ilike(f"%{genre}%"))
     if language:
-        stmt = stmt.where(Book.language == language)
+        base_stmt = base_stmt.where(Book.language == language)
 
+    # Count total matching books
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    # Fetch page
+    stmt = base_stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
     rows = result.all()
 
@@ -150,7 +172,13 @@ async def list_books(
         data.ratings_count = ratings_count
         books.append(data)
 
-    return books
+    return BooksPage(
+        items=books,
+        total=total,
+        page=page,
+        limit=limit,
+        pages=math.ceil(total / limit) if limit else 1,
+    )
 
 
 @router.get("/{book_id}", response_model=BookWithRating)

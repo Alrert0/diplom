@@ -46,6 +46,7 @@ class RatingResponse(BaseModel):
     score: int
     review_text: str | None = None
     created_at: datetime
+    username: str | None = None
 
     model_config = {"from_attributes": True}
 

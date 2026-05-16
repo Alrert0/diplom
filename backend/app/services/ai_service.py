@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 OLLAMA_TIMEOUT = 120.0  # seconds — LLM generation can be slow
 
 OLLAMA_OPTIONS = {"num_ctx": 4096, "num_predict": 600, "temperature": 0.7}
-OLLAMA_OPTIONS_LONG = {"num_ctx": 4096, "num_predict": 1200, "temperature": 0.7}
+OLLAMA_OPTIONS_LONG = {"num_ctx": 4096, "num_predict": 400, "temperature": 0.7}
 
 # Regex to strip qwen3 think-aloud blocks from content.
 # Matches everything up to and including </think> (with optional whitespace).
@@ -99,19 +99,36 @@ SUMMARY_PROMPTS = {
 
 PROGRESS_PROMPTS = {
     "en": (
-        "You are a book reading assistant. Summarize everything the reader has read so far. "
-        "Highlight the main plot points, character development, and key themes. "
-        "Write a cohesive summary in 5-10 sentences. " + _NO_THINK
+        "Summarize the book excerpt in exactly 4-6 plain sentences. "
+        "No markdown. No lists. No headers. No bold. Just normal sentences.\n\n"
+        "Example output:\n"
+        "The story follows Tom, an enslaved man on the Shelby plantation in Kentucky. "
+        "Mr. Shelby is forced to sell Tom to a trader named Haley due to debt. "
+        "Eliza, another enslaved woman, flees with her son Harry after learning of the sale. "
+        "Mrs. Shelby is devastated and tries to delay Haley's pursuit. "
+        "The story so far explores the cruel realities of slavery and the courage of those who resist it.\n\n"
+        "Now write the same style summary for the given text. 4-6 sentences max. Stop completely after the last sentence."
     ),
     "ru": (
-        "Ты — помощник по чтению книг. Подведи итог всему, что читатель прочитал до этого момента. "
-        "Выдели основные сюжетные линии, развитие персонажей и ключевые темы. "
-        "Напиши связное резюме в 5-10 предложений. Отвечай на русском языке. " + _NO_THINK_RU
+        "Напиши резюме прочитанного ровно в 4-6 обычных предложениях. "
+        "Никакого markdown. Никаких списков. Никаких заголовков. Никакого жирного шрифта. Только обычные предложения.\n\n"
+        "Пример правильного ответа:\n"
+        "История рассказывает о Томе — порабощённом человеке на плантации Шелби в Кентукки. "
+        "Мистер Шелби вынужден продать Тома торговцу Хейли из-за долгов. "
+        "Элиза бежит с сыном Гарри, узнав о продаже. "
+        "Миссис Шелби в отчаянии и пытается задержать погоню. "
+        "История исследует жестокость рабства и мужество тех, кто сопротивляется.\n\n"
+        "Теперь напиши в таком же стиле резюме для данного текста. Максимум 6 предложений. Полностью останови после последнего предложения."
     ),
     "kk": (
-        "Сен — кітап оқу көмекшісісің. Оқырман осы уақытқа дейін оқығанның бәрін түйіндеп жаз. "
-        "Негізгі сюжет желілерін, кейіпкерлердің дамуын және басты тақырыптарды атап өт. "
-        "5-10 сөйлемнен тұратын байланысты түйіндеме жаз. Қазақ тілінде жауап бер. " + _NO_THINK_KK
+        "Оқылғанды дәл 4-6 қарапайым сөйлеммен жаз. "
+        "Markdown жоқ. Тізім жоқ. Тақырып жоқ. Тек қарапайым сөйлемдер.\n\n"
+        "Дұрыс жауап мысалы:\n"
+        "Оқиға Кентукки штатындағы Шелби плантациясындағы Том туралы. "
+        "Мистер Шелби қарызы үшін Томды Хейли деген саудагерге сатуға мәжбүр болады. "
+        "Элиза сатылым туралы біліп, баласымен қашады. "
+        "Оқиға құлдықтың қатыгездігі мен қарсылықты зерттейді.\n\n"
+        "Енді осындай стильде берілген мәтіннің түйіндемесін жаз. Максимум 6 сөйлем. Соңғы сөйлемнен кейін тоқта."
     ),
 }
 
